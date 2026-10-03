@@ -1,0 +1,28 @@
+.git
+.github
+.claude
+.idea
+
+# Local deployment configuration and credentials.
+.env
+**/.env
+*.key
+*.pem
+
+# Local state, build outputs, caches, and dependency trees.
+data
+dist
+bin
+.tmp
+.tmp-webdist
+.gocache
+.npm-cache
+node_modules
+**/node_modules
+
+# Docs and local test artifacts.
+docs
+*.db
+*.db-shm
+*.db-wal
+*.log

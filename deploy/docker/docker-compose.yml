@@ -1,0 +1,27 @@
+name: nyatunnel
+
+# M0 only serves the admin console. From M1 the server also listens on 127.0.0.1:8081 (HTTP tunnel
+# ingress, behind Caddy), 127.0.0.1:8082 (internal, Caddy on-demand TLS ask) and the public TCP/UDP
+# port pool, and this file switches to network_mode: host. Caddy keeps 80/443; see deploy/caddy.
+services:
+  server:
+    container_name: nyatunnel-server
+    image: "${NYATUNNEL_IMAGE:?set in deploy/docker/.env}:${NYATUNNEL_VERSION:?set in deploy/docker/.env}"
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev
+    environment:
+      NYATUNNEL_LISTEN: ${NYATUNNEL_LISTEN:-:8080}
+      NYATUNNEL_DATA: ${NYATUNNEL_DATA:-/data}
+    volumes:
+      - ../../data:/data
+    ports:
+      - "${NYATUNNEL_BIND_ADDR:-127.0.0.1}:${NYATUNNEL_HOST_PORT:-8080}:8080"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

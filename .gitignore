@@ -1,0 +1,16 @@
+.gocache/
+.npm-cache/
+bin/
+data/
+dist/
+.tmp/
+.tmp-webdist/
+node_modules/
+*.tsbuildinfo
+*.db
+*.db-shm
+*.db-wal
+deploy/docker/.env
+*.key
+
+.idea

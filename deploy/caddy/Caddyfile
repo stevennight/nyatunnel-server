@@ -1,0 +1,49 @@
+# NyaTunnel behind an existing Caddy (see docs/设计方案.md §12).
+#
+# Caddy keeps ports 80/443, all certificates and your other sites; NyaTunnel only listens on
+# 127.0.0.1. The wildcard block needs a Caddy build with the Cloudflare DNS module:
+#   xcaddy build --with github.com/caddy-dns/cloudflare
+# and CLOUDFLARE_API_TOKEN (Zone / DNS / Edit, limited to the zone) in Caddy's environment.
+#
+# Merge these blocks into your existing Caddyfile; only one global options block is allowed.
+
+{
+	on_demand_tls {
+		# Caddy only issues a certificate for a custom domain when NyaTunnel answers 200,
+		# i.e. the domain is registered and active in the admin console.
+		# 8082 is NyaTunnel's internal listener: never reverse_proxy it.
+		ask http://127.0.0.1:8082/caddy/ask
+	}
+}
+
+# Admin console, API and device connections (WebSocket).
+tunnel.example.com {
+	encode zstd gzip
+	header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+	reverse_proxy 127.0.0.1:8080 {
+		# Do not buffer: device connections and server-sent events are long-lived streams.
+		flush_interval -1
+	}
+}
+
+# Tunnel root domain: one wildcard certificate via Cloudflare DNS-01.
+# Add a block like this for every further root domain configured in the admin console.
+*.dev.example.com {
+	tls {
+		dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+	}
+	reverse_proxy 127.0.0.1:8081 {
+		flush_interval -1
+	}
+}
+
+# Custom domains: catches every host not matched by a more specific site above (your other
+# sites keep working). Certificates are issued on first visit, only for domains NyaTunnel approves.
+https:// {
+	tls {
+		on_demand
+	}
+	reverse_proxy 127.0.0.1:8081 {
+		flush_interval -1
+	}
+}

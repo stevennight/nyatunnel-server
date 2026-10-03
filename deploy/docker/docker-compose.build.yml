@@ -1,0 +1,8 @@
+# Local source build: add this file after docker-compose.yml.
+services:
+  server:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      args:
+        NYATUNNEL_VERSION: ${NYATUNNEL_VERSION:-0.1.0-dev}

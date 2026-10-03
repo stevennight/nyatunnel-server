@@ -1,0 +1,143 @@
+name: Release
+
+# Push a tag v<VERSION> to publish binaries, the web build and the GHCR image.
+# Versions with a suffix (0.2.0-beta.1) are published as pre-releases and do not move `latest`.
+on:
+  push:
+    tags:
+      - v*
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-assets:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      build_date: ${{ steps.release-meta.outputs.build_date }}
+      prerelease: ${{ steps.release-meta.outputs.prerelease }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Check tag matches VERSION
+        run: |
+          version="$(tr -d '\r\n' < VERSION)"
+          if [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match VERSION ${version}" >&2
+            exit 1
+          fi
+          web_version="$(node -p "require('./web/app/package.json').version")"
+          if [ "${web_version}" != "${version}" ]; then
+            echo "web/app/package.json version ${web_version} does not match VERSION ${version}" >&2
+            exit 1
+          fi
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/app/package-lock.json
+
+      - name: Verify source
+        run: |
+          go vet ./...
+          go test ./...
+          npm ci --prefix web/app
+          npm test --prefix web/app
+
+      - name: Prepare release metadata
+        id: release-meta
+        run: |
+          echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          case "${GITHUB_REF_NAME}" in
+            *-*) echo "prerelease=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "prerelease=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Build binaries
+        run: |
+          # The binaries serve the embedded fallback page unless NYATUNNEL_WEB_DIR points at a web build,
+          # so ship the web build alongside them.
+          npm run build --prefix web/app
+          mkdir -p dist
+          tar -czf dist/nyatunnel-web.tar.gz -C .tmp-webdist .
+          LDFLAGS="-s -w -X nyatunnel-server/internal/shared/version.Version=${GITHUB_REF_NAME} -X nyatunnel-server/internal/shared/version.Commit=${GITHUB_SHA} -X nyatunnel-server/internal/shared/version.BuildDate=${{ steps.release-meta.outputs.build_date }}"
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath -buildvcs=false -ldflags "$LDFLAGS" -o "dist/nyatunnel-server-linux-$arch" ./cmd/server
+          done
+          (cd dist && sha256sum * > SHA256SUMS)
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          name: NyaTunnel Server ${{ github.ref_name }}
+          prerelease: ${{ steps.release-meta.outputs.prerelease == 'true' }}
+          generate_release_notes: true
+          files: dist/*
+
+  docker-image:
+    runs-on: ubuntu-latest
+    needs: release-assets
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Prepare image name
+        run: echo "IMAGE_NAME=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/nyatunnel-server" >> "$GITHUB_ENV"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=tag
+            type=semver,pattern={{major}}.{{minor}},enable=${{ needs.release-assets.outputs.prerelease != 'true' }}
+            type=raw,value=latest,enable=${{ needs.release-assets.outputs.prerelease != 'true' }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            NYATUNNEL_VERSION=${{ github.ref_name }}
+            NYATUNNEL_COMMIT=${{ github.sha }}
+            NYATUNNEL_BUILD_DATE=${{ needs.release-assets.outputs.build_date }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
