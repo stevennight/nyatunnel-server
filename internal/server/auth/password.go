@@ -30,7 +30,7 @@ const (
 )
 
 // ErrWeakPassword is returned for passwords that do not meet the policy.
-var ErrWeakPassword = fmt.Errorf("password must be at least %d characters", MinPasswordLength)
+var ErrWeakPassword = fmt.Errorf("密码至少需要 %d 个字符", MinPasswordLength)
 
 // HashPassword returns "argon2id$v=19$m=…,t=…,p=…$<salt>$<key>".
 func HashPassword(password string) (string, error) {

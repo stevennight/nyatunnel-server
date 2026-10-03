@@ -2,10 +2,10 @@ package api
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/stevennight/nyatunnel-common/tunnelproto"
 
@@ -168,6 +168,9 @@ func (s *server) handleCreateTunnel(w http.ResponseWriter, r *http.Request, p *p
 	}
 	now := s.now().UnixMilli()
 	t := &store.Tunnel{ID: auth.NewID("tun_"), CreatedAt: now}
+	if !p.admin() && !s.selfService(w, r, p, &in, nil) {
+		return
+	}
 	if !s.applyTunnelInput(w, r, t, &in, nil) {
 		return
 	}
@@ -187,8 +190,11 @@ func (s *server) handleUpdateTunnel(w http.ResponseWriter, r *http.Request, p *p
 		return
 	}
 	old, err := s.Store.TunnelByID(r.Context(), r.PathValue("id"))
-	if err != nil {
-		s.fail(w, "update tunnel", err)
+	if err != nil || !p.owns(old.UserID) {
+		writeError(w, http.StatusNotFound, "not_found", "")
+		return
+	}
+	if !p.admin() && !s.selfService(w, r, p, &in, old) {
 		return
 	}
 	t := *old
@@ -207,8 +213,8 @@ func (s *server) handleUpdateTunnel(w http.ResponseWriter, r *http.Request, p *p
 
 func (s *server) handleDeleteTunnel(w http.ResponseWriter, r *http.Request, p *principal) {
 	t, err := s.Store.TunnelByID(r.Context(), r.PathValue("id"))
-	if err != nil {
-		s.fail(w, "delete tunnel", err)
+	if err != nil || !p.owns(t.UserID) {
+		writeError(w, http.StatusNotFound, "not_found", "")
 		return
 	}
 	if err := s.Store.DeleteTunnel(r.Context(), t.ID); err != nil {
@@ -218,6 +224,49 @@ func (s *server) handleDeleteTunnel(w http.ResponseWriter, r *http.Request, p *p
 	s.changed(r.Context(), deref(t.DeviceID))
 	s.audit(r, p, "tunnel.delete", t.ID, t.Name)
 	writeOK(w)
+}
+
+// selfService checks a normal user's own tunnel change against their quota and tightens it to
+// the quota's caps. Anything beyond the quota must go through a tunnel request.
+func (s *server) selfService(w http.ResponseWriter, r *http.Request, p *principal, in *tunnelInput, old *store.Tunnel) bool {
+	deny := func(code, msg string) bool {
+		writeError(w, http.StatusForbidden, code, msg)
+		return false
+	}
+	q := p.user.Quota
+	if !q.Enabled {
+		return deny("self_service_disabled", "你的账号未开通自助创建，请提交隧道申请")
+	}
+	in.UserID = p.user.ID
+	if !q.AllowsType(in.Type) {
+		return deny("type_not_allowed", "你的额度不允许自助创建该类型的隧道，请提交申请")
+	}
+	if old == nil {
+		n, err := s.Store.TunnelCount(r.Context(), p.user.ID)
+		if err != nil {
+			s.fail(w, "tunnel count", err)
+			return false
+		}
+		if q.MaxTunnels > 0 && n >= q.MaxTunnels {
+			return deny("tunnel_limit", "隧道数量已达到额度上限，请提交申请")
+		}
+	}
+	if q.MaxBandwidthKbps > 0 && (in.BandwidthKbps <= 0 || in.BandwidthKbps > q.MaxBandwidthKbps) {
+		in.BandwidthKbps = q.MaxBandwidthKbps
+	}
+	if q.MaxDays > 0 {
+		limit := s.now().Add(time.Duration(q.MaxDays) * 24 * time.Hour).UnixMilli()
+		if old != nil && old.ExpiresAt != nil && *old.ExpiresAt > limit {
+			limit = *old.ExpiresAt // an admin granted longer; editing must not shorten it unexpectedly
+		}
+		if in.ExpiresAt == nil || *in.ExpiresAt <= 0 || *in.ExpiresAt > limit {
+			in.ExpiresAt = &limit
+		}
+	}
+	if q.Interstitial && in.Type == store.TypeHTTPS {
+		in.Interstitial = true
+	}
+	return true
 }
 
 func deref(p *string) string {
@@ -240,8 +289,8 @@ func (s *server) applyTunnelInput(w http.ResponseWriter, r *http.Request, t *sto
 		return false
 	}
 	owner, err := s.Store.UserByID(ctx, in.UserID)
-	if err != nil {
-		return bad("invalid_user", "请选择隧道所属用户")
+	if err != nil || owner.DisabledAt != nil {
+		return bad("invalid_user", "请选择隧道所属用户（不能是已禁用的账号）")
 	}
 	if in.DeviceID != nil && *in.DeviceID == "" {
 		in.DeviceID = nil
@@ -273,12 +322,26 @@ func (s *server) applyTunnelInput(w http.ResponseWriter, r *http.Request, t *sto
 
 	switch in.Type {
 	case store.TypeHTTPS:
-		if in.DomainID == nil || in.Subdomain == nil {
-			return bad("domain_required", "请选择域名并填写子域名")
+		if in.DomainID == nil {
+			return bad("domain_required", "请选择域名")
 		}
 		d, err := s.Store.DomainByID(ctx, *in.DomainID)
 		if err != nil {
 			return bad("invalid_domain", "域名不存在")
+		}
+		if d.Kind == store.DomainCustom {
+			if d.OwnerUserID != nil && *d.OwnerUserID != owner.ID {
+				return bad("domain_not_owned", "该自定义域名属于其他用户")
+			}
+			if d.Status == store.DomainPending || d.Status == store.DomainDisabled {
+				return bad("domain_not_approved", "该自定义域名尚未批准或已停用")
+			}
+			host := d.Name
+			t.DomainID, t.Subdomain, t.Host, t.RemotePort = &d.ID, nil, &host, nil
+			break
+		}
+		if in.Subdomain == nil {
+			return bad("domain_required", "请填写子域名")
 		}
 		sub := strings.ToLower(strings.TrimSpace(*in.Subdomain))
 		prefix := ""
@@ -402,6 +465,9 @@ func (s *server) pickPort(ctx context.Context, proto string, requested *int, sel
 	}
 	if requested != nil && *requested != 0 {
 		port := *requested
+		if id, taken := used[port]; taken && id == selfID {
+			return port, nil // unchanged: keep it even if its pool was removed
+		}
 		if !inPool(port) {
 			return 0, &rules.Error{Code: "port_not_in_pool", Message: "端口不在任何 " + strings.ToUpper(proto) + " 端口池内"}
 		}
@@ -421,90 +487,6 @@ func (s *server) pickPort(ctx context.Context, proto string, requested *int, sel
 		}
 	}
 	return 0, &rules.Error{Code: "pool_exhausted", Message: "没有可用的 " + strings.ToUpper(proto) + " 端口，请先在端口池中添加范围"}
-}
-
-type domainView struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	AllowUsers  bool   `json:"allowUsers"`
-	TunnelCount int    `json:"tunnelCount"`
-	CreatedAt   int64  `json:"createdAt"`
-}
-
-func (s *server) handleListDomains(w http.ResponseWriter, r *http.Request, p *principal) {
-	domains, err := s.Store.Domains(r.Context())
-	if err != nil {
-		s.fail(w, "list domains", err)
-		return
-	}
-	count := map[string]int{}
-	if p.admin() {
-		tunnels, _ := s.Store.Tunnels(r.Context(), "")
-		for _, t := range tunnels {
-			count[deref(t.DomainID)]++
-		}
-	}
-	out := []domainView{}
-	for _, d := range domains {
-		if !p.admin() && !d.AllowUsers {
-			continue
-		}
-		out = append(out, domainView{ID: d.ID, Name: d.Name, AllowUsers: d.AllowUsers, TunnelCount: count[d.ID], CreatedAt: d.CreatedAt})
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"domains": out})
-}
-
-func (s *server) handleCreateDomain(w http.ResponseWriter, r *http.Request, p *principal) {
-	var body struct {
-		Name       string `json:"name"`
-		AllowUsers bool   `json:"allowUsers"`
-	}
-	if !decode(w, r, &body) {
-		return
-	}
-	name := strings.Trim(strings.ToLower(strings.TrimSpace(body.Name)), ".")
-	name = strings.TrimPrefix(name, "*.")
-	if err := rules.DomainName(name); err != nil {
-		s.fail(w, "create domain", err)
-		return
-	}
-	d := &store.Domain{ID: auth.NewID("dom_"), Name: name, AllowUsers: body.AllowUsers, CreatedAt: s.now().UnixMilli()}
-	if err := s.Store.CreateDomain(r.Context(), d); err != nil {
-		s.fail(w, "create domain", err)
-		return
-	}
-	s.audit(r, p, "domain.create", d.ID, d.Name)
-	writeJSON(w, http.StatusCreated, map[string]any{"domain": domainView{ID: d.ID, Name: d.Name, AllowUsers: d.AllowUsers, CreatedAt: d.CreatedAt}})
-}
-
-func (s *server) handleUpdateDomain(w http.ResponseWriter, r *http.Request, p *principal) {
-	var body struct {
-		AllowUsers bool `json:"allowUsers"`
-	}
-	if !decode(w, r, &body) {
-		return
-	}
-	id := r.PathValue("id")
-	if err := s.Store.SetDomainAllowUsers(r.Context(), id, body.AllowUsers); err != nil {
-		s.fail(w, "update domain", err)
-		return
-	}
-	s.audit(r, p, "domain.update", id, "")
-	writeOK(w)
-}
-
-func (s *server) handleDeleteDomain(w http.ResponseWriter, r *http.Request, p *principal) {
-	id := r.PathValue("id")
-	if err := s.Store.DeleteDomain(r.Context(), id); err != nil {
-		if errors.Is(err, store.ErrConflict) {
-			writeError(w, http.StatusConflict, "domain_in_use", "仍有隧道使用该域名")
-			return
-		}
-		s.fail(w, "delete domain", err)
-		return
-	}
-	s.audit(r, p, "domain.delete", id, "")
-	writeOK(w)
 }
 
 type portPoolView struct {
@@ -566,6 +548,15 @@ func (s *server) handleCreatePortPool(w http.ResponseWriter, r *http.Request, p 
 
 func (s *server) handleDeletePortPool(w http.ResponseWriter, r *http.Request, p *principal) {
 	id := r.PathValue("id")
+	pool, err := s.Store.PortPoolByID(r.Context(), id)
+	if err != nil {
+		s.fail(w, "delete port pool", err)
+		return
+	}
+	if n, err := s.Store.PortsInRange(r.Context(), pool.Proto, pool.RangeStart, pool.RangeEnd); err != nil || n > 0 {
+		writeError(w, http.StatusConflict, "pool_in_use", "仍有隧道使用该范围内的端口")
+		return
+	}
 	if err := s.Store.DeletePortPool(r.Context(), id); err != nil {
 		s.fail(w, "delete port pool", err)
 		return

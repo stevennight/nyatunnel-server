@@ -40,6 +40,10 @@ type testEnv struct {
 	store   *store.Store
 	hub     *hub.Hub
 	edge    *edge.Edge
+	handler *Handler
+	// dns answers custom-domain lookups.
+	dnsMu sync.Mutex
+	dns   map[string][]net.IP
 }
 
 const testSetupToken = "setup-token"
@@ -72,15 +76,31 @@ func newEnv(t *testing.T) *testEnv {
 		t.Fatal(err)
 	}
 	cfg.WebDir = t.TempDir()
+	cfg.PublicIPs = []net.IP{net.ParseIP("203.0.113.10")}
 	env.cfg = cfg
+	env.dns = map[string][]net.IP{}
 	resolver := &realip.Resolver{Trusted: []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32")}}
 	env.hub = hub.New(hub.Options{Store: st, Log: log, PublicHost: cfg.PublicHost, TCPHost: "127.0.0.1",
-		OnChange: func() { env.edge.Reload(context.Background()) }, Audit: AuditFunc(st, log, time.Now)})
+		OnChange: func() { env.edge.Reload(context.Background()) }, Audit: AuditFunc(st, log, time.Now),
+		OnRequest: func(ctx context.Context, deviceID string, req tunnelproto.TunnelRequest) error {
+			return env.handler.DeviceRequest(ctx, deviceID, req)
+		},
+		MinClientVersion: func(ctx context.Context) string { return env.handler.MinClientVersion(ctx) }})
 	env.edge = edge.New(edge.Options{Store: st, Dialer: env.hub, Log: log, RealIP: resolver, BindAddr: "127.0.0.1",
 		GateKey: bytes.Repeat([]byte{2}, 32), ConsoleURL: env.console.URL, Audit: AuditFunc(st, log, time.Now)})
 	t.Cleanup(env.edge.Close)
 	t.Cleanup(env.hub.Close)
-	handler = New(Options{Config: cfg, Store: st, Hub: env.hub, Edge: env.edge, Secrets: box, Log: log, SetupToken: testSetupToken})
+	h := New(Options{Config: cfg, Store: st, Hub: env.hub, Edge: env.edge, Secrets: box, Log: log, SetupToken: testSetupToken,
+		LookupIP: func(_ context.Context, host string) ([]net.IP, error) {
+			env.dnsMu.Lock()
+			defer env.dnsMu.Unlock()
+			if ips, ok := env.dns[host]; ok {
+				return ips, nil
+			}
+			return nil, &net.DNSError{Err: "no such host", Name: host, IsNotFound: true}
+		}})
+	handler = h
+	env.handler = h
 	env.ingress = httptest.NewServer(env.edge)
 	t.Cleanup(env.ingress.Close)
 	return env

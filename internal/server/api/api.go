@@ -12,9 +12,12 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/stevennight/nyatunnel-common/tunnelproto"
+
 	"nyatunnel-server/internal/server/config"
 	"nyatunnel-server/internal/server/edge"
 	"nyatunnel-server/internal/server/hub"
+	"nyatunnel-server/internal/server/notify"
 	"nyatunnel-server/internal/server/realip"
 	"nyatunnel-server/internal/server/rules"
 	"nyatunnel-server/internal/server/secrets"
@@ -32,6 +35,11 @@ type Options struct {
 	Log     *slog.Logger
 	// SetupToken must accompany the first-run setup request (printed to the log at startup).
 	SetupToken string
+	Notify     *notify.Notifier
+	// LookupIP resolves custom domains; tests replace it.
+	LookupIP func(ctx context.Context, host string) ([]net.IP, error)
+	// Background, when set, runs periodic jobs (custom-domain DNS checks) until it ends.
+	Background context.Context
 	Now        func() time.Time
 }
 
@@ -42,13 +50,30 @@ type server struct {
 	enrollFails   *failureLimiter
 }
 
+// Handler is the console handler plus hooks the hub needs.
+type Handler struct {
+	http.Handler
+	s *server
+}
+
+// DeviceRequest handles request.create from a device's control stream.
+func (h *Handler) DeviceRequest(ctx context.Context, deviceID string, req tunnelproto.TunnelRequest) error {
+	return h.s.DeviceRequest(ctx, deviceID, req)
+}
+
+// MinClientVersion is the oldest client the server accepts ("" = any).
+func (h *Handler) MinClientVersion(ctx context.Context) string { return h.s.minClientVersion(ctx) }
+
 // New returns the handler for the console listener.
-func New(opts Options) http.Handler {
+func New(opts Options) *Handler {
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
 	if opts.Log == nil {
 		opts.Log = slog.New(slog.DiscardHandler)
+	}
+	if opts.Notify == nil {
+		opts.Notify = &notify.Notifier{Store: opts.Store, Secrets: opts.Secrets, Log: opts.Log}
 	}
 	s := &server{
 		Options:       opts,
@@ -81,7 +106,21 @@ func New(opts Options) http.Handler {
 	mux.Handle("POST /api/v1/devices/{id}/revoke", s.user(s.handleRevokeDevice))
 	mux.Handle("POST /api/v1/enrollments", s.user(s.handleCreateEnrollment))
 	mux.Handle("GET /api/v1/tunnels", s.user(s.handleListTunnels))
+	mux.Handle("POST /api/v1/tunnels", s.user(s.handleCreateTunnel))
+	mux.Handle("PUT /api/v1/tunnels/{id}", s.user(s.handleUpdateTunnel))
+	mux.Handle("DELETE /api/v1/tunnels/{id}", s.user(s.handleDeleteTunnel))
 	mux.Handle("GET /api/v1/domains", s.user(s.handleListDomains))
+	mux.Handle("POST /api/v1/domains/custom", s.user(s.handleRequestCustomDomain))
+	mux.Handle("POST /api/v1/domains/{id}/check", s.user(s.handleCheckDomain))
+	mux.Handle("DELETE /api/v1/domains/{id}", s.user(s.handleDeleteDomain))
+	mux.Handle("GET /api/v1/requests", s.user(s.handleListRequests))
+	mux.Handle("POST /api/v1/requests", s.user(s.handleCreateRequest))
+	mux.Handle("POST /api/v1/requests/{id}/cancel", s.user(s.handleCancelRequest))
+	mux.Handle("GET /api/v1/enrollments", s.user(s.handleListEnrollments))
+	mux.Handle("DELETE /api/v1/enrollments/{id}", s.user(s.handleCancelEnrollment))
+	mux.Handle("GET /api/v1/me/sessions", s.user(s.handleListSessions))
+	mux.Handle("DELETE /api/v1/me/sessions/{id}", s.user(s.handleDeleteSession))
+	mux.Handle("POST /api/v1/me/totp/recovery-codes", s.user(s.handleRegenerateRecoveryCodes))
 	mux.Handle("GET /api/v1/traffic", s.user(s.handleTraffic))
 	mux.HandleFunc("GET /tunnel-login", s.handleTunnelLogin)
 
@@ -90,12 +129,16 @@ func New(opts Options) http.Handler {
 	mux.Handle("POST /api/v1/users", s.admin(s.handleCreateUser))
 	mux.Handle("PATCH /api/v1/users/{id}", s.admin(s.handleUpdateUser))
 	mux.Handle("POST /api/v1/users/{id}/totp/reset", s.admin(s.handleResetUserTOTP))
-	mux.Handle("POST /api/v1/tunnels", s.admin(s.handleCreateTunnel))
-	mux.Handle("PUT /api/v1/tunnels/{id}", s.admin(s.handleUpdateTunnel))
-	mux.Handle("DELETE /api/v1/tunnels/{id}", s.admin(s.handleDeleteTunnel))
+	mux.Handle("PUT /api/v1/users/{id}/quota", s.admin(s.handleSetUserQuota))
 	mux.Handle("POST /api/v1/domains", s.admin(s.handleCreateDomain))
 	mux.Handle("PATCH /api/v1/domains/{id}", s.admin(s.handleUpdateDomain))
-	mux.Handle("DELETE /api/v1/domains/{id}", s.admin(s.handleDeleteDomain))
+	mux.Handle("POST /api/v1/requests/{id}/approve", s.admin(s.handleApproveRequest))
+	mux.Handle("POST /api/v1/requests/{id}/reject", s.admin(s.handleRejectRequest))
+	mux.Handle("GET /api/v1/channels", s.admin(s.handleListChannels))
+	mux.Handle("POST /api/v1/channels", s.admin(s.handleCreateChannel))
+	mux.Handle("PUT /api/v1/channels/{id}", s.admin(s.handleUpdateChannel))
+	mux.Handle("DELETE /api/v1/channels/{id}", s.admin(s.handleDeleteChannel))
+	mux.Handle("POST /api/v1/channels/{id}/test", s.admin(s.handleTestChannel))
 	mux.Handle("GET /api/v1/port-pools", s.admin(s.handleListPortPools))
 	mux.Handle("POST /api/v1/port-pools", s.admin(s.handleCreatePortPool))
 	mux.Handle("DELETE /api/v1/port-pools/{id}", s.admin(s.handleDeletePortPool))
@@ -114,7 +157,24 @@ func New(opts Options) http.Handler {
 	h = securityHeaders(h)
 	h = requestLog(opts.Log, h)
 	h = recoverer(opts.Log, h)
-	return h
+	if opts.Background != nil {
+		go s.background(opts.Background)
+	}
+	return &Handler{Handler: h, s: s}
+}
+
+// background re-checks custom domains: waiting ones every 5 minutes, active ones every 6 hours.
+func (s *server) background(ctx context.Context) {
+	t := time.NewTicker(5 * time.Minute)
+	defer t.Stop()
+	for n := 0; ; n++ {
+		s.CheckDomains(ctx, n%72 == 0)
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
 }
 
 func (s *server) now() time.Time { return s.Now() }
@@ -191,7 +251,7 @@ func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 		if errors.As(err, &tooBig) {
 			writeError(w, http.StatusRequestEntityTooLarge, "body_too_large", "")
 		} else {
-			writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON body")
+			writeError(w, http.StatusBadRequest, "bad_request", "请求格式不正确")
 		}
 		return false
 	}

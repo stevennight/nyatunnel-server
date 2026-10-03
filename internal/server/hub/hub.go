@@ -42,7 +42,11 @@ type Options struct {
 	OnChange func()
 	// Audit records an event; may be nil.
 	Audit func(ctx context.Context, e store.AuditEvent)
-	Now   func() time.Time
+	// OnRequest handles a device's tunnel request; nil refuses requests.
+	OnRequest func(ctx context.Context, deviceID string, req tunnelproto.TunnelRequest) error
+	// MinClientVersion is the oldest accepted client version ("" = any); nil means any.
+	MinClientVersion func(ctx context.Context) string
+	Now              func() time.Time
 }
 
 // Hub tracks device sessions.
@@ -62,6 +66,9 @@ func New(opt Options) *Hub {
 	}
 	if opt.Audit == nil {
 		opt.Audit = func(context.Context, store.AuditEvent) {}
+	}
+	if opt.MinClientVersion == nil {
+		opt.MinClientVersion = func(context.Context) string { return "" }
 	}
 	return &Hub{opt: opt, sessions: map[string]*Session{}}
 }
@@ -182,7 +189,8 @@ func (h *Hub) BuildConfig(ctx context.Context, deviceID string) (*tunnelproto.Co
 	if err != nil {
 		return nil, err
 	}
-	cfg := &tunnelproto.Config{Rev: d.ConfigRev, Tunnels: make([]tunnelproto.Tunnel, 0, len(tunnels))}
+	cfg := &tunnelproto.Config{Rev: d.ConfigRev, Tunnels: make([]tunnelproto.Tunnel, 0, len(tunnels)),
+		CanRequest: h.opt.OnRequest != nil, MinClientVersion: h.opt.MinClientVersion(ctx)}
 	for _, t := range tunnels {
 		cfg.Tunnels = append(cfg.Tunnels, h.ProtoTunnel(t))
 	}
@@ -213,6 +221,32 @@ func (h *Hub) ProtoTunnel(t *store.Tunnel) tunnelproto.Tunnel {
 		pt.ExpiresAt = &at
 	}
 	return pt
+}
+
+// VersionLess compares MAJOR.MINOR.PATCH versions, ignoring a "v" prefix and any "-pre" suffix
+// (a dev build of 0.3.0 counts as 0.3.0). Unparsable versions count as 0.0.0.
+func VersionLess(a, b string) bool {
+	pa, pb := parseVersion(a), parseVersion(b)
+	for i := range pa {
+		if pa[i] != pb[i] {
+			return pa[i] < pb[i]
+		}
+	}
+	return false
+}
+
+func parseVersion(v string) [3]int {
+	v = strings.TrimPrefix(strings.TrimSpace(v), "v")
+	v, _, _ = strings.Cut(v, "-")
+	var out [3]int
+	for i, part := range strings.SplitN(v, ".", 3) {
+		n, err := strconv.Atoi(part)
+		if err != nil {
+			return [3]int{}
+		}
+		out[i] = n
+	}
+	return out
 }
 
 // limitsSummary is the human-readable line the GUI shows under a tunnel.
@@ -316,6 +350,12 @@ func (h *Hub) ServeConnect(w http.ResponseWriter, r *http.Request, clientIP stri
 		}
 		h.opt.Log.Info("hub: handshake failed", "ip", clientIP, "err", err)
 		ws.Close(websocket.StatusPolicyViolation, "handshake failed")
+		return
+	}
+
+	if min := h.opt.MinClientVersion(ctx); min != "" && VersionLess(hello.ClientVersion, min) {
+		h.opt.Log.Info("hub: client too old", "device", device.ID, "version", hello.ClientVersion, "min", min)
+		ws.Close(tunnelproto.CloseUpgradeRequired, "client version "+hello.ClientVersion+" < "+min)
 		return
 	}
 
@@ -430,6 +470,20 @@ func (h *Hub) readLoop(ctx context.Context, s *Session) {
 				result = tunnelproto.Result{Error: "bad_request"}
 			} else if err := h.applyUpdate(ctx, s, &u); err != nil {
 				result = tunnelproto.Result{Error: errorCode(err)}
+			}
+			_ = s.control.Send(tunnelproto.TypeResult, m.ID, result)
+		case tunnelproto.TypeRequestCreate:
+			var req tunnelproto.TunnelRequest
+			result := tunnelproto.Result{OK: true}
+			switch {
+			case h.opt.OnRequest == nil:
+				result = tunnelproto.Result{Error: "unsupported"}
+			case m.Decode(&req) != nil:
+				result = tunnelproto.Result{Error: "bad_request"}
+			default:
+				if err := h.opt.OnRequest(ctx, s.DeviceID, req); err != nil {
+					result = tunnelproto.Result{Error: errorCode(err)}
+				}
 			}
 			_ = s.control.Send(tunnelproto.TypeResult, m.ID, result)
 		default:

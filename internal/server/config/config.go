@@ -36,6 +36,9 @@ type Config struct {
 	WebDir string
 	// SessionTTL is how long a console login lasts without use.
 	SessionTTL time.Duration
+	// PublicIPs are this server's public addresses; custom domains must resolve to one of them.
+	// Empty: resolve the public host (wrong when it sits behind a CDN).
+	PublicIPs []net.IP
 }
 
 // Load reads the configuration; getenv is os.Getenv outside tests.
@@ -86,6 +89,16 @@ func Load(getenv func(string) string) (Config, error) {
 		return Config{}, fmt.Errorf("NYATUNNEL_SESSION_TTL: must be a duration of at least 1m")
 	}
 	cfg.SessionTTL = ttl
+	for _, s := range strings.Split(getenv("NYATUNNEL_PUBLIC_IPS"), ",") {
+		if s = strings.TrimSpace(s); s == "" {
+			continue
+		}
+		ip := net.ParseIP(s)
+		if ip == nil {
+			return Config{}, fmt.Errorf("NYATUNNEL_PUBLIC_IPS: %q is not an IP address", s)
+		}
+		cfg.PublicIPs = append(cfg.PublicIPs, ip)
+	}
 	return cfg, nil
 }
 

@@ -45,6 +45,7 @@ type User struct {
 	DisabledAt    *int64
 	CreatedAt     int64
 	UpdatedAt     int64
+	Quota         Quota
 }
 
 // IsAdmin reports whether the user is an administrator.
@@ -53,14 +54,16 @@ func (u *User) IsAdmin() bool { return u.Role == RoleAdmin }
 // TOTPEnabled reports whether the user has a second factor.
 func (u *User) TOTPEnabled() bool { return len(u.TOTPSecret) > 0 }
 
-const userCols = `id, username, password_hash, role, totp_secret, recovery_codes, disabled_at, created_at, updated_at`
+const userCols = `id, username, password_hash, role, totp_secret, recovery_codes, disabled_at, created_at, updated_at, quota`
 
 func scanUser(row interface{ Scan(...any) error }) (*User, error) {
 	var u User
 	var codes sql.NullString
-	if err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.TOTPSecret, &codes, &u.DisabledAt, &u.CreatedAt, &u.UpdatedAt); err != nil {
+	var quota string
+	if err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.TOTPSecret, &codes, &u.DisabledAt, &u.CreatedAt, &u.UpdatedAt, &quota); err != nil {
 		return nil, notFoundOr(err)
 	}
+	u.Quota = ParseQuota(quota)
 	if codes.Valid && codes.String != "" {
 		_ = json.Unmarshal([]byte(codes.String), &u.RecoveryCodes)
 	}

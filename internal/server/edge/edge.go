@@ -36,6 +36,10 @@ type Options struct {
 	ConsoleURL string
 	// Audit records events (quota alerts); may be nil.
 	Audit func(ctx context.Context, e store.AuditEvent)
+	// Notify sends an operational notification (quota, traffic surge); may be nil.
+	Notify func(kind, title, text string)
+	// SurgeMBPerHour returns the hourly traffic per tunnel above which a surge is reported (0 = off).
+	SurgeMBPerHour func(ctx context.Context) int
 	Now   func() time.Time
 	// Listen opens TCP listeners; tests replace it.
 	Listen func(network, addr string) (net.Listener, error)
@@ -124,9 +128,11 @@ type Edge struct {
 	metersMu sync.Mutex
 	meters   map[string]*meter
 
-	quotaMu   sync.Mutex
-	overQuota map[string]bool
-	alerted   map[string]int64 // tunnel -> month already reported
+	quotaMu    sync.Mutex
+	overQuota  map[string]bool
+	alerted    map[string]int64 // tunnel or "user:<id>" -> month already reported
+	surged     map[string]int64 // tunnel -> hour already reported
+	userQuotas map[string]int   // user -> monthly MB (0 = unlimited)
 
 	gate  *gate
 	proxy *httpProxy
@@ -146,9 +152,15 @@ func New(opt Options) *Edge {
 	if opt.Audit == nil {
 		opt.Audit = func(context.Context, store.AuditEvent) {}
 	}
+	if opt.Notify == nil {
+		opt.Notify = func(string, string, string) {}
+	}
+	if opt.SurgeMBPerHour == nil {
+		opt.SurgeMBPerHour = func(context.Context) int { return 0 }
+	}
 	e := &Edge{
 		opt: opt, all: map[string]*route{}, byHost: map[string]*route{}, tcp: map[int]*portListener{}, udp: map[int]*udpListener{},
-		meters: map[string]*meter{}, overQuota: map[string]bool{}, alerted: map[string]int64{},
+		meters: map[string]*meter{}, overQuota: map[string]bool{}, alerted: map[string]int64{}, surged: map[string]int64{}, userQuotas: map[string]int{},
 	}
 	e.gate = newGate(e)
 	e.proxy = newHTTPProxy(e)
@@ -181,6 +193,25 @@ func (e *Edge) Reload(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	domains, err := e.opt.Store.Domains(ctx)
+	if err != nil {
+		return err
+	}
+	quotas, err := e.opt.Store.UserQuotas(ctx)
+	if err != nil {
+		return err
+	}
+	e.quotaMu.Lock()
+	e.userQuotas = map[string]int{}
+	for id, q := range quotas {
+		e.userQuotas[id] = q.MonthlyTrafficMB
+	}
+	e.quotaMu.Unlock()
+	// Custom domains only route once they are active; root domains always do.
+	routable := map[string]bool{}
+	for _, d := range domains {
+		routable[d.ID] = d.Kind != store.DomainCustom || d.Status == store.DomainActive
+	}
 	now := e.opt.Now()
 	all := map[string]*route{}
 	byHost := map[string]*route{}
@@ -193,7 +224,9 @@ func (e *Edge) Reload(ctx context.Context) error {
 		switch {
 		case t.Host != nil:
 			r.Host = strings.ToLower(*t.Host)
-			byHost[r.Host] = r
+			if t.DomainID == nil || routable[*t.DomainID] {
+				byHost[r.Host] = r
+			}
 		case t.RemotePort != nil && r.live(now):
 			// Ports of tunnels that cannot carry traffic stay closed, so scanners see nothing.
 			r.Port = *t.RemotePort

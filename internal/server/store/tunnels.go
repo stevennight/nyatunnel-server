@@ -159,38 +159,49 @@ func (s *Store) DisableUserTunnels(ctx context.Context, userID string, now int64
 	return err
 }
 
-// Domain is a tunnel root domain: tunnels get <subdomain>.<name>.
+// Domain is a root domain (tunnels get <subdomain>.<name>) or a custom domain (one tunnel gets
+// the whole name).
 type Domain struct {
-	ID         string
-	Name       string
-	AllowUsers bool
-	CreatedAt  int64
+	ID          string
+	Name        string
+	AllowUsers  bool // root domains: whether normal users may use it
+	CreatedAt   int64
+	Kind        string // root, custom
+	OwnerUserID *string
+	Status      string // custom domains: pending, dns, active, disabled
+	CheckedAt   *int64
+	CheckError  string
+}
+
+const domainCols = `id, name, allow_users, created_at, kind, owner_user_id, status, checked_at, check_error`
+
+func scanDomain(row interface{ Scan(...any) error }) (*Domain, error) {
+	var d Domain
+	if err := row.Scan(&d.ID, &d.Name, &d.AllowUsers, &d.CreatedAt, &d.Kind, &d.OwnerUserID, &d.Status, &d.CheckedAt, &d.CheckError); err != nil {
+		return nil, notFoundOr(err)
+	}
+	return &d, nil
 }
 
 func (s *Store) Domains(ctx context.Context) ([]*Domain, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, name, allow_users, created_at FROM domains ORDER BY name`)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+domainCols+` FROM domains ORDER BY kind DESC, name`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	out := []*Domain{}
 	for rows.Next() {
-		var d Domain
-		if err := rows.Scan(&d.ID, &d.Name, &d.AllowUsers, &d.CreatedAt); err != nil {
+		d, err := scanDomain(rows)
+		if err != nil {
 			return nil, err
 		}
-		out = append(out, &d)
+		out = append(out, d)
 	}
 	return out, rows.Err()
 }
 
 func (s *Store) DomainByID(ctx context.Context, id string) (*Domain, error) {
-	var d Domain
-	err := s.db.QueryRowContext(ctx, `SELECT id, name, allow_users, created_at FROM domains WHERE id = ?`, id).Scan(&d.ID, &d.Name, &d.AllowUsers, &d.CreatedAt)
-	if err != nil {
-		return nil, notFoundOr(err)
-	}
-	return &d, nil
+	return scanDomain(s.db.QueryRowContext(ctx, `SELECT `+domainCols+` FROM domains WHERE id = ?`, id))
 }
 
 func (s *Store) CreateDomain(ctx context.Context, d *Domain) error {

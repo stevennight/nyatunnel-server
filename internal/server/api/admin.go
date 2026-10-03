@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -37,13 +38,18 @@ func (s *server) handleAudit(w http.ResponseWriter, r *http.Request, p *principa
 }
 
 type settingsView struct {
-	ServerName string `json:"serverName"`
-	ForceTOTP  bool   `json:"forceTotp"`
+	ServerName       string `json:"serverName"`
+	ForceTOTP        bool   `json:"forceTotp"`
+	MinClientVersion string `json:"minClientVersion"`
+	SurgeMBPerHour   int    `json:"surgeMbPerHour"`
 }
 
 func (s *server) handleGetSettings(w http.ResponseWriter, r *http.Request, p *principal) {
-	writeJSON(w, http.StatusOK, settingsView{ServerName: s.serverName(r.Context()), ForceTOTP: s.forceTOTP(r.Context())})
+	writeJSON(w, http.StatusOK, settingsView{ServerName: s.serverName(r.Context()), ForceTOTP: s.forceTOTP(r.Context()),
+		MinClientVersion: s.minClientVersion(r.Context()), SurgeMBPerHour: s.SurgeMBPerHour(r.Context())})
 }
+
+var semverRE = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
 
 func (s *server) handlePutSettings(w http.ResponseWriter, r *http.Request, p *principal) {
 	var body settingsView
@@ -64,6 +70,22 @@ func (s *server) handlePutSettings(w http.ResponseWriter, r *http.Request, p *pr
 		return
 	}
 	if err := s.Store.SetSetting(r.Context(), settingForceTOTP, strconv.FormatBool(body.ForceTOTP)); err != nil {
+		s.fail(w, "settings", err)
+		return
+	}
+	body.MinClientVersion = strings.TrimPrefix(strings.TrimSpace(body.MinClientVersion), "v")
+	if body.MinClientVersion != "" && !semverRE.MatchString(body.MinClientVersion) {
+		writeError(w, http.StatusBadRequest, "invalid_version", "最低客户端版本应形如 0.2.0")
+		return
+	}
+	if body.SurgeMBPerHour < 0 {
+		body.SurgeMBPerHour = 0
+	}
+	if err := s.Store.SetSetting(r.Context(), settingMinClient, body.MinClientVersion); err != nil {
+		s.fail(w, "settings", err)
+		return
+	}
+	if err := s.Store.SetSetting(r.Context(), settingSurgeMBHourly, strconv.Itoa(body.SurgeMBPerHour)); err != nil {
 		s.fail(w, "settings", err)
 		return
 	}

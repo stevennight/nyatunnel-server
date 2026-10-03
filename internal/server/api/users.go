@@ -8,14 +8,17 @@ import (
 	"github.com/stevennight/nyatunnel-common/tunnelproto"
 
 	"nyatunnel-server/internal/server/auth"
+	"nyatunnel-server/internal/server/edge"
 	"nyatunnel-server/internal/server/rules"
 	"nyatunnel-server/internal/server/store"
 )
 
 type adminUserView struct {
 	userView
-	DeviceCount int `json:"deviceCount"`
-	TunnelCount int `json:"tunnelCount"`
+	DeviceCount int         `json:"deviceCount"`
+	TunnelCount int         `json:"tunnelCount"`
+	Quota       store.Quota `json:"quota"`
+	MonthBytes  int64       `json:"monthBytes"`
 }
 
 func (s *server) handleListUsers(w http.ResponseWriter, r *http.Request, p *principal) {
@@ -43,9 +46,14 @@ func (s *server) handleListUsers(w http.ResponseWriter, r *http.Request, p *prin
 	for _, t := range tunnels {
 		tc[t.UserID]++
 	}
+	month, _ := s.Store.TrafficByUser(r.Context(), edge.MonthStart(s.now()))
 	out := make([]adminUserView, 0, len(users))
 	for _, u := range users {
-		out = append(out, adminUserView{userView: viewUser(u), DeviceCount: dc[u.ID], TunnelCount: tc[u.ID]})
+		q := u.Quota
+		if q.Types == nil {
+			q.Types = []string{}
+		}
+		out = append(out, adminUserView{userView: viewUser(u), DeviceCount: dc[u.ID], TunnelCount: tc[u.ID], Quota: q, MonthBytes: month[u.ID].Bytes()})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"users": out})
 }

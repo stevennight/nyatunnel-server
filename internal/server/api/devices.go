@@ -13,6 +13,7 @@ import (
 	"github.com/stevennight/nyatunnel-common/tunnelproto"
 
 	"nyatunnel-server/internal/server/auth"
+	"nyatunnel-server/internal/server/notify"
 	"nyatunnel-server/internal/server/store"
 )
 
@@ -299,6 +300,9 @@ func (s *server) handleEnrollClaim(w http.ResponseWriter, r *http.Request) {
 	_ = s.Store.Audit(r.Context(), store.AuditEvent{At: now, ActorType: "device", ActorID: d.ID, ActorName: d.Name, Action: "device.enrolled",
 		Target: d.ID, Detail: "enrollment " + e.ID + ", " + d.Platform, IP: s.realIP.ClientIP(r)})
 	s.changed(r.Context(), d.ID)
+	if owner, err := s.Store.UserByID(r.Context(), d.UserID); err == nil {
+		s.Notify.Send(notify.EventDeviceEnrolled, "新设备已注册", owner.Username+" 的设备 "+d.Name+"（"+d.Platform+"）已注册，来自 "+s.realIP.ClientIP(r))
+	}
 	writeJSON(w, http.StatusCreated, map[string]any{"deviceId": d.ID})
 }
 

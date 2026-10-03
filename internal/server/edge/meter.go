@@ -2,6 +2,7 @@ package edge
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -146,6 +147,40 @@ func (e *Edge) flush(ctx context.Context) {
 		return
 	}
 	e.checkQuotas(ctx, now)
+	e.checkSurge(ctx, now)
+}
+
+// checkSurge reports tunnels whose traffic this hour passed the configured threshold, once per hour.
+func (e *Edge) checkSurge(ctx context.Context, now time.Time) {
+	limit := e.opt.SurgeMBPerHour(ctx)
+	if limit <= 0 {
+		return
+	}
+	hour := hourStart(now)
+	usage, err := e.opt.Store.TrafficByTunnel(ctx, hour)
+	if err != nil {
+		return
+	}
+	for id, u := range usage {
+		if u.Bytes() < int64(limit)<<20 {
+			continue
+		}
+		e.quotaMu.Lock()
+		seen := e.surged[id] == hour
+		e.surged[id] = hour
+		e.quotaMu.Unlock()
+		if seen {
+			continue
+		}
+		r := e.routeByID(id)
+		name := id
+		if r != nil {
+			name = r.Name
+		}
+		detail := fmt.Sprintf("%s 本小时已产生 %.1f MB 流量（阈值 %d MB）", name, float64(u.Bytes())/(1<<20), limit)
+		e.opt.Audit(ctx, store.AuditEvent{ActorType: "system", Action: "tunnel.traffic_surge", Target: id, Detail: detail})
+		e.opt.Notify("traffic.surge", "流量突增："+name, detail)
+	}
 }
 
 func (e *Edge) owners() map[string]string {
@@ -165,11 +200,40 @@ func (e *Edge) checkQuotas(ctx context.Context, now time.Time) {
 		e.opt.Log.Warn("edge: quota usage", "err", err)
 		return
 	}
+	byUser, err := e.opt.Store.TrafficByUser(ctx, MonthStart(now))
+	if err != nil {
+		e.opt.Log.Warn("edge: user quota usage", "err", err)
+		return
+	}
 	month := MonthStart(now)
+	e.quotaMu.Lock()
+	overUsers := map[string]bool{}
+	for id, mb := range e.userQuotas {
+		if mb > 0 && byUser[id].Bytes() >= int64(mb)<<20 {
+			overUsers[id] = true
+		}
+	}
+	var userAlerts []string
+	for id := range overUsers {
+		if e.alerted["user:"+id] != month {
+			e.alerted["user:"+id] = month
+			userAlerts = append(userAlerts, id)
+		}
+	}
+	e.quotaMu.Unlock()
+	for _, id := range userAlerts {
+		e.opt.Audit(ctx, store.AuditEvent{ActorType: "system", Action: "user.quota_paused", Target: id, Detail: "account monthly traffic quota used up"})
+		e.opt.Notify("quota.exceeded", "账号流量已用完", "用户 "+id+" 本月流量配额已用完，其所有隧道已暂停。")
+	}
+
 	e.mu.RLock()
 	over := map[string]bool{}
 	var alerts []*route
 	for id, r := range e.all {
+		if overUsers[r.UserID] {
+			over[id] = true
+			continue
+		}
 		if r.QuotaMB <= 0 || usage[id].Bytes() < int64(r.QuotaMB)<<20 {
 			continue
 		}
@@ -195,9 +259,9 @@ func (e *Edge) checkQuotas(ctx context.Context, now time.Time) {
 		}
 	}
 	for id := range over {
-		if e.alerted[id] != month {
+		if r := e.routeByID(id); r != nil && !overUsers[r.UserID] && e.alerted[id] != month {
 			e.alerted[id] = month
-			notify = append(notify, e.routeByID(id))
+			notify = append(notify, r)
 		}
 	}
 	e.quotaMu.Unlock()
@@ -206,11 +270,12 @@ func (e *Edge) checkQuotas(ctx context.Context, now time.Time) {
 		if r == nil {
 			continue
 		}
-		action := "tunnel.quota_exceeded"
+		action, text := "tunnel.quota_exceeded", "隧道 "+r.Name+" 本月流量已超过配额。"
 		if over[r.TunnelID] {
-			action = "tunnel.quota_paused"
+			action, text = "tunnel.quota_paused", "隧道 "+r.Name+" 本月流量配额已用完，已自动暂停。"
 		}
 		e.opt.Audit(ctx, store.AuditEvent{ActorType: "system", Action: action, Target: r.TunnelID, Detail: r.Name})
+		e.opt.Notify("quota.exceeded", "流量配额："+r.Name, text)
 	}
 	if changed {
 		if err := e.Reload(ctx); err != nil {

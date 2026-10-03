@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"nyatunnel-server/internal/server/auth"
+	"nyatunnel-server/internal/server/notify"
 	"nyatunnel-server/internal/server/rules"
 	"nyatunnel-server/internal/server/store"
 	"nyatunnel-server/internal/shared/version"
@@ -150,6 +151,9 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	failed := func(reason string, u *store.User) {
 		s.loginFailures.fail("ip|"+ip, now)
 		s.loginFailures.fail("user|"+username, now)
+		if blocked, _ := s.loginFailures.blocked("user|"+username, now); blocked {
+			s.Notify.Send(notify.EventBruteForce, "登录失败过多", "账号 "+username+" 在短时间内多次登录失败（最近一次来自 "+ip+"），已临时锁定 5 分钟。")
+		}
 		var p *principal
 		if u != nil {
 			p = &principal{user: u}
@@ -193,7 +197,7 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			}
 			s.audit(r, &principal{user: u}, "auth.recovery_code_used", u.ID, "")
 		case strings.TrimSpace(body.TOTP) == "":
-			writeError(w, http.StatusUnauthorized, "totp_required", "")
+			writeError(w, http.StatusUnauthorized, "totp_required", "请输入两步验证码")
 			return
 		default:
 			secret, err := s.Secrets.Open(u.TOTPSecret)

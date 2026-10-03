@@ -16,14 +16,18 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/stevennight/nyatunnel-common/tunnelproto"
 
 	"nyatunnel-server/internal/server/api"
 	"nyatunnel-server/internal/server/config"
 	"nyatunnel-server/internal/server/edge"
 	"nyatunnel-server/internal/server/hub"
+	"nyatunnel-server/internal/server/notify"
 	"nyatunnel-server/internal/server/realip"
 	"nyatunnel-server/internal/server/secrets"
 	"nyatunnel-server/internal/server/store"
@@ -98,6 +102,7 @@ func serve(cfg config.Config, log *slog.Logger) error {
 		tcpHost = h
 	}
 	var ed *edge.Edge
+	var console *api.Handler
 	h := hub.New(hub.Options{
 		Store: st, Log: log, PublicHost: cfg.PublicHost, TCPHost: tcpHost,
 		OnChange: func() {
@@ -106,14 +111,30 @@ func serve(cfg config.Config, log *slog.Logger) error {
 			}
 		},
 		Audit: api.AuditFunc(st, log, time.Now),
+		OnRequest: func(ctx context.Context, deviceID string, req tunnelproto.TunnelRequest) error {
+			return console.DeviceRequest(ctx, deviceID, req)
+		},
+		MinClientVersion: func(ctx context.Context) string { return console.MinClientVersion(ctx) },
 	})
+	notifier := &notify.Notifier{Store: st, Secrets: box, Log: log, ServerName: func(ctx context.Context) string {
+		v, _ := st.Setting(ctx, "server_name")
+		if v == "" {
+			v = "NyaTunnel"
+		}
+		return v
+	}}
 	gateKey, err := gateKey(ctx, st)
 	if err != nil {
 		return err
 	}
 	ed = edge.New(edge.Options{
 		Store: st, Dialer: h, Log: log, RealIP: resolver, BindAddr: cfg.PortBindAddr, GateKey: gateKey,
-		ConsoleURL: cfg.PublicURL, Audit: api.AuditFunc(st, log, time.Now),
+		ConsoleURL: cfg.PublicURL, Audit: api.AuditFunc(st, log, time.Now), Notify: notifier.Send,
+		SurgeMBPerHour: func(ctx context.Context) int {
+			v, _ := st.Setting(ctx, "surge_mb_per_hour")
+			n, _ := strconv.Atoi(v)
+			return n
+		},
 	})
 	if err := ed.Reload(ctx); err != nil {
 		return err
@@ -121,15 +142,14 @@ func serve(cfg config.Config, log *slog.Logger) error {
 	go ed.Run(ctx)
 	go housekeeping(ctx, st, log)
 
-	console := &http.Server{
-		Addr: cfg.Listen, ReadHeaderTimeout: 10 * time.Second,
-		Handler: api.New(api.Options{Config: cfg, Store: st, Hub: h, Edge: ed, Secrets: box, Log: log, SetupToken: setupToken}),
-	}
+	console = api.New(api.Options{Config: cfg, Store: st, Hub: h, Edge: ed, Secrets: box, Log: log, SetupToken: setupToken,
+		Notify: notifier, Background: ctx})
+	consoleSrv := &http.Server{Addr: cfg.Listen, ReadHeaderTimeout: 10 * time.Second, Handler: console}
 	ingress := &http.Server{Addr: cfg.IngressListen, Handler: ed, ReadHeaderTimeout: 30 * time.Second}
 	internal := &http.Server{Addr: cfg.InternalListen, Handler: ed.AskHandler(), ReadHeaderTimeout: 5 * time.Second}
 
 	errc := make(chan error, 3)
-	for _, srv := range []*http.Server{console, ingress, internal} {
+	for _, srv := range []*http.Server{consoleSrv, ingress, internal} {
 		go func() {
 			if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				errc <- fmt.Errorf("listen %s: %w", srv.Addr, err)
@@ -150,7 +170,7 @@ func serve(cfg config.Config, log *slog.Logger) error {
 	ed.Flush(context.Background())
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	for _, srv := range []*http.Server{console, ingress, internal} {
+	for _, srv := range []*http.Server{consoleSrv, ingress, internal} {
 		_ = srv.Shutdown(shutdownCtx)
 	}
 	return runErr

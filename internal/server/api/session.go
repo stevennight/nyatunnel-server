@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
 
 	"nyatunnel-server/internal/server/auth"
 	"nyatunnel-server/internal/server/store"
@@ -15,8 +16,10 @@ const (
 	// cross-site form posts, and SameSite=Strict already keeps the cookie off them; this is belt and braces.
 	csrfHeader = "X-NyaTunnel-CSRF"
 
-	settingForceTOTP  = "force_totp"
-	settingServerName = "server_name"
+	settingForceTOTP     = "force_totp"
+	settingServerName    = "server_name"
+	settingMinClient     = "min_client_version"
+	settingSurgeMBHourly = "surge_mb_per_hour"
 )
 
 // principal is the signed-in console user.
@@ -49,7 +52,7 @@ func (s *server) guard(h handler, adminOnly bool, opts ...routeOpt) http.Handler
 	allowSetup := len(opts) > 0 && opts[0] == allowDuringTOTPSetup
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if unsafeMethod(r.Method) && r.Header.Get(csrfHeader) == "" {
-			writeError(w, http.StatusForbidden, "csrf", "missing "+csrfHeader+" header")
+			writeError(w, http.StatusForbidden, "csrf", "请求缺少 "+csrfHeader+" 头")
 			return
 		}
 		p, err := s.authenticate(w, r)
@@ -132,6 +135,18 @@ func (s *server) clearSessionCookie(w http.ResponseWriter) {
 func (s *server) forceTOTP(ctx context.Context) bool {
 	v, _ := s.Store.Setting(ctx, settingForceTOTP)
 	return v == "true"
+}
+
+func (s *server) minClientVersion(ctx context.Context) string {
+	v, _ := s.Store.Setting(ctx, settingMinClient)
+	return v
+}
+
+// SurgeMBPerHour is the traffic surge threshold (0 = off).
+func (s *server) SurgeMBPerHour(ctx context.Context) int {
+	v, _ := s.Store.Setting(ctx, settingSurgeMBHourly)
+	n, _ := strconv.Atoi(v)
+	return n
 }
 
 func (s *server) serverName(ctx context.Context) string {
