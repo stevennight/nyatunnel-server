@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/base64"
 	"errors"
 	"flag"
@@ -25,6 +26,7 @@ import (
 
 	"nyatunnel-server/internal/server/api"
 	"nyatunnel-server/internal/server/config"
+	"nyatunnel-server/internal/server/direct"
 	"nyatunnel-server/internal/server/edge"
 	"nyatunnel-server/internal/server/hub"
 	"nyatunnel-server/internal/server/notify"
@@ -97,6 +99,15 @@ func serve(cfg config.Config, log *slog.Logger) error {
 	}
 
 	resolver := &realip.Resolver{Trusted: cfg.TrustedProxies}
+	var directEndpoint *tunnelproto.DirectEndpoint
+	var directCert tls.Certificate
+	if cfg.DirectListen != "" {
+		cert, pin, err := direct.LoadOrCreate(cfg.DataDir)
+		if err != nil {
+			return fmt.Errorf("direct listener certificate: %w", err)
+		}
+		directCert, directEndpoint = cert, &tunnelproto.DirectEndpoint{Addr: cfg.DirectAddr, CertSHA256: pin}
+	}
 	tcpHost := cfg.PublicHost
 	if h, _, err := net.SplitHostPort(tcpHost); err == nil {
 		tcpHost = h
@@ -115,6 +126,7 @@ func serve(cfg config.Config, log *slog.Logger) error {
 			return console.DeviceRequest(ctx, deviceID, req)
 		},
 		MinClientVersion: func(ctx context.Context) string { return console.MinClientVersion(ctx) },
+		Direct:           directEndpoint,
 	})
 	notifier := &notify.Notifier{Store: st, Secrets: box, Log: log, ServerName: func(ctx context.Context) string {
 		v, _ := st.Setting(ctx, "server_name")
@@ -148,7 +160,30 @@ func serve(cfg config.Config, log *slog.Logger) error {
 	ingress := &http.Server{Addr: cfg.IngressListen, Handler: ed, ReadHeaderTimeout: 30 * time.Second}
 	internal := &http.Server{Addr: cfg.InternalListen, Handler: ed.AskHandler(), ReadHeaderTimeout: 5 * time.Second}
 
-	errc := make(chan error, 3)
+	servers := []*http.Server{consoleSrv, ingress, internal}
+	errc := make(chan error, 4)
+	if directEndpoint != nil {
+		// Only device connections are served here; the peer address is the device itself.
+		directSrv := &http.Server{
+			Addr: cfg.DirectListen, ReadHeaderTimeout: 10 * time.Second,
+			TLSConfig: &tls.Config{Certificates: []tls.Certificate{directCert}, MinVersion: tls.VersionTLS13},
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet || r.URL.Path != tunnelproto.ConnectPath {
+					http.NotFound(w, r)
+					return
+				}
+				host, _, _ := net.SplitHostPort(r.RemoteAddr)
+				h.ServeConnect(w, r, host)
+			}),
+		}
+		servers = append(servers, directSrv)
+		go func() {
+			if err := directSrv.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				errc <- fmt.Errorf("listen %s: %w", directSrv.Addr, err)
+			}
+		}()
+		log.Info("direct device listener enabled", "listen", cfg.DirectListen, "addr", cfg.DirectAddr, "pin", directEndpoint.CertSHA256)
+	}
 	for _, srv := range []*http.Server{consoleSrv, ingress, internal} {
 		go func() {
 			if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -170,7 +205,7 @@ func serve(cfg config.Config, log *slog.Logger) error {
 	ed.Flush(context.Background())
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	for _, srv := range []*http.Server{consoleSrv, ingress, internal} {
+	for _, srv := range servers {
 		_ = srv.Shutdown(shutdownCtx)
 	}
 	return runErr

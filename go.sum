@@ -16,8 +16,8 @@ github.com/ncruces/go-strftime v1.0.0 h1:HMFp8mLCTPp341M/ZnA4qaf7ZlsbTc+miZjCLOF
 github.com/ncruces/go-strftime v1.0.0/go.mod h1:Fwc5htZGVVkseilnfgOVb9mKy6w1naJmn9CehxcKcls=
 github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec h1:W09IVJc94icq4NjY3clb7Lk8O1qJ8BdBEF8z0ibU0rE=
 github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec/go.mod h1:qqbHyh8v60DhA7CoWK5oRCqLrMHRGoxYCSS9EjAz6Eo=
-github.com/stevennight/nyatunnel-common v0.0.0-20261003163831-d8ee8d7c231e h1:mtltu/bnfi0/IBEuSNuh9Fyvjb0O56t0DILJ0J80Csc=
-github.com/stevennight/nyatunnel-common v0.0.0-20261003163831-d8ee8d7c231e/go.mod h1:xtn8oMgwUqvpvkAmDu0+mjMcgTEBdjdKuMjJcIPVnoM=
+github.com/stevennight/nyatunnel-common v0.0.0-20261003172318-bd14ad4e9c9c h1:Pb1yVmyviPjwSC1iNds2QfeOJ9OtWOqrCtGcyL5updY=
+github.com/stevennight/nyatunnel-common v0.0.0-20261003172318-bd14ad4e9c9c/go.mod h1:xtn8oMgwUqvpvkAmDu0+mjMcgTEBdjdKuMjJcIPVnoM=
 golang.org/x/crypto v0.57.0 h1:3ZVCjf8Ggz7zneR/EHRVx68Ctf+2pmIMP2UFhh9cC6M=
 golang.org/x/crypto v0.57.0/go.mod h1:Fdz0i5U6CoizGwLda9DttjSk6qlZo25zYNtR+ycvuZA=
 golang.org/x/mod v0.41.0 h1:qJmnOUb4YB+FsEuM3HcWucdZASCPGhsX6uljO6pog0c=

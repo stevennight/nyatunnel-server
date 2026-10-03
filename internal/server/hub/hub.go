@@ -46,7 +46,9 @@ type Options struct {
 	OnRequest func(ctx context.Context, deviceID string, req tunnelproto.TunnelRequest) error
 	// MinClientVersion is the oldest accepted client version ("" = any); nil means any.
 	MinClientVersion func(ctx context.Context) string
-	Now              func() time.Time
+	// Direct is offered to devices as a path that bypasses the reverse proxy; nil when disabled.
+	Direct *tunnelproto.DirectEndpoint
+	Now    func() time.Time
 }
 
 // Hub tracks device sessions.
@@ -190,7 +192,7 @@ func (h *Hub) BuildConfig(ctx context.Context, deviceID string) (*tunnelproto.Co
 		return nil, err
 	}
 	cfg := &tunnelproto.Config{Rev: d.ConfigRev, Tunnels: make([]tunnelproto.Tunnel, 0, len(tunnels)),
-		CanRequest: h.opt.OnRequest != nil, MinClientVersion: h.opt.MinClientVersion(ctx)}
+		CanRequest: h.opt.OnRequest != nil, MinClientVersion: h.opt.MinClientVersion(ctx), Direct: h.opt.Direct}
 	for _, t := range tunnels {
 		cfg.Tunnels = append(cfg.Tunnels, h.ProtoTunnel(t))
 	}

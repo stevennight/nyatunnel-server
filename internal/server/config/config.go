@@ -39,6 +39,10 @@ type Config struct {
 	// PublicIPs are this server's public addresses; custom domains must resolve to one of them.
 	// Empty: resolve the public host (wrong when it sits behind a CDN).
 	PublicIPs []net.IP
+	// DirectListen enables the direct device listener (TLS with a pinned self-signed certificate).
+	DirectListen string
+	// DirectAddr is the host:port devices dial for the direct listener.
+	DirectAddr string
 }
 
 // Load reads the configuration; getenv is os.Getenv outside tests.
@@ -98,6 +102,20 @@ func Load(getenv func(string) string) (Config, error) {
 			return Config{}, fmt.Errorf("NYATUNNEL_PUBLIC_IPS: %q is not an IP address", s)
 		}
 		cfg.PublicIPs = append(cfg.PublicIPs, ip)
+	}
+	if cfg.DirectListen = strings.TrimSpace(getenv("NYATUNNEL_DIRECT_LISTEN")); cfg.DirectListen != "" {
+		_, port, err := net.SplitHostPort(cfg.DirectListen)
+		if err != nil {
+			return Config{}, fmt.Errorf("NYATUNNEL_DIRECT_LISTEN: %w", err)
+		}
+		host := cfg.PublicHost
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
+		}
+		cfg.DirectAddr = envOr(getenv, "NYATUNNEL_DIRECT_ADDR", net.JoinHostPort(host, port))
+		if _, _, err := net.SplitHostPort(cfg.DirectAddr); err != nil {
+			return Config{}, fmt.Errorf("NYATUNNEL_DIRECT_ADDR: %w", err)
+		}
 	}
 	return cfg, nil
 }
