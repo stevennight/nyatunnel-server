@@ -239,6 +239,8 @@ func (g *gate) internal(w http.ResponseWriter, req *http.Request, r *route, clie
 		_ = req.ParseForm()
 		g.setCookie(w, req, ackCookie, g.cookieValue("ack", r, ackTTL), ackTTL)
 		http.Redirect(w, req, safeReturn(req.PostForm.Get("r")), http.StatusSeeOther)
+	case internalPrefix + "report":
+		g.report(w, req, r, clientIP)
 	case internalPrefix + "auth":
 		if r.Policy != "login" || !g.loginTokenOK(req.URL.Query().Get("token"), r.TunnelID) {
 			plain(w, http.StatusForbidden, "sign-in failed")
@@ -316,13 +318,14 @@ func (g *gate) passwordPage(w http.ResponseWriter, req *http.Request, r *route, 
 	}
 	page(w, status, "需要访问密码", fmt.Sprintf(`<div style="font-size:2.2rem">🔒</div><h2>此页面受访问密码保护</h2><p class="hint">%s · 由 NyaTunnel 提供的内网穿透服务</p>%s
 <form method="post" action="%sgate"><input type="hidden" name="r" value="%s"><input type="password" name="password" placeholder="访问密码" autofocus required> <button>进入</button></form>
-<p class="hint" style="margin-top:2rem">如果你是被陌生链接引导到这里，并被要求输入账号密码或支付信息，请勿继续。</p>`,
-		html.EscapeString(r.Host), msg, internalPrefix, html.EscapeString(safeReturn(ret))))
+<p class="hint" style="margin-top:2rem">如果你是被陌生链接引导到这里，并被要求输入账号密码或支付信息，请勿继续，并 <a href="%sreport">举报此页面</a>。</p>`,
+		html.EscapeString(r.Host), msg, internalPrefix, html.EscapeString(safeReturn(ret)), internalPrefix))
 }
 
 func (g *gate) interstitialPage(w http.ResponseWriter, req *http.Request, r *route) {
 	page(w, http.StatusOK, "即将访问内网穿透地址", fmt.Sprintf(`<div style="font-size:2.2rem">⚠️</div><h2>你即将访问一个内网穿透地址</h2>
 <p><b>%s</b></p><div class="warn">这个网站运行在某人自己的电脑或服务器上，并通过 NyaTunnel 暴露到公网。它不是任何银行、支付平台或大型网站的官方页面。<br><br>如果它要求你输入其他网站的账号密码、验证码或支付信息，请立即关闭。</div>
-<form method="post" action="%scontinue"><input type="hidden" name="r" value="%s"><button>我了解，继续访问</button></form>`,
-		html.EscapeString(r.Host), internalPrefix, html.EscapeString(safeReturn(req.URL.RequestURI()))))
+<form method="post" action="%scontinue"><input type="hidden" name="r" value="%s"><button>我了解，继续访问</button></form>
+<p class="hint" style="margin-top:1.5rem">觉得这个页面有问题？<a href="%sreport">举报此页面</a></p>`,
+		html.EscapeString(r.Host), internalPrefix, html.EscapeString(safeReturn(req.URL.RequestURI())), internalPrefix))
 }

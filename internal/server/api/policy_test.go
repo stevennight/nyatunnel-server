@@ -367,3 +367,30 @@ func TestMaxConns(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 }
+
+func TestAbuseReport(t *testing.T) {
+	p := newPolicyEnv(t)
+	p.tunnel("", "shady", map[string]any{"interstitial": true})
+	v := p.visitor("shady.t.example.com")
+	if _, body := v.do("GET", "/", nil, true, nil); !strings.Contains(body, "/__nyatunnel/report") {
+		t.Fatal("warning page has no report link")
+	}
+	if resp, body := v.do("GET", "/__nyatunnel/report", nil, true, nil); resp.StatusCode != 200 || !strings.Contains(body, "举报此页面") {
+		t.Fatalf("report form: %d", resp.StatusCode)
+	}
+	resp, _ := v.do("POST", "/__nyatunnel/report", url.Values{"kind": {"phishing"}, "detail": {"looks like a bank"}}, true, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("report: %d", resp.StatusCode)
+	}
+	var audit struct{ Events []auditView }
+	p.admin.must("GET", "/api/v1/audit", nil, &audit)
+	if audit.Events[0].Action != "tunnel.reported" || !strings.Contains(audit.Events[0].Detail, "looks like a bank") || audit.Events[0].IP != "198.51.100.1" {
+		t.Fatalf("audit %+v", audit.Events[0])
+	}
+	for i := 0; i < 10; i++ {
+		resp, _ = v.do("POST", "/__nyatunnel/report", url.Values{"kind": {"other"}}, true, nil)
+	}
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("report flood: %d", resp.StatusCode)
+	}
+}

@@ -30,11 +30,12 @@ const (
 	EventSurge          = "traffic.surge"
 	EventBruteForce     = "auth.bruteforce"
 	EventDomain         = "domain.changed"
+	EventAbuseReport    = "abuse.report"
 	EventTest           = "test"
 )
 
 // AllEvents lists the kinds for the console.
-var AllEvents = []string{EventRequestCreated, EventDeviceEnrolled, EventQuota, EventSurge, EventBruteForce, EventDomain}
+var AllEvents = []string{EventRequestCreated, EventDeviceEnrolled, EventQuota, EventSurge, EventBruteForce, EventDomain, EventAbuseReport}
 
 // Event is one notification.
 type Event struct {
