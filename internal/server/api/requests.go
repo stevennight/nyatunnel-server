@@ -15,6 +15,9 @@ import (
 	"nyatunnel-server/internal/server/store"
 )
 
+// maxPendingRequests keeps one user (or a misbehaving device) from flooding the review queue.
+const maxPendingRequests = 5
+
 type requestView struct {
 	ID         string               `json:"id"`
 	UserID     string               `json:"userId"`
@@ -80,6 +83,11 @@ func (s *server) createRequest(ctx context.Context, u *store.User, deviceID *str
 	reason = strings.TrimSpace(reason)
 	if err := validRequest(&pl, reason); err != nil {
 		return nil, err
+	}
+	if n, err := s.Store.PendingRequestCountOf(ctx, u.ID); err != nil {
+		return nil, err
+	} else if n >= maxPendingRequests {
+		return nil, &rules.Error{Code: "too_many_requests", Message: "待审批的申请过多，请等待管理员处理"}
 	}
 	q := &store.TunnelRequest{ID: auth.NewID("req_"), UserID: u.ID, DeviceID: deviceID, Payload: pl, Reason: reason, CreatedAt: s.now().UnixMilli()}
 	if err := s.Store.CreateTunnelRequest(ctx, q); err != nil {

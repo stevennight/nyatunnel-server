@@ -167,6 +167,13 @@ func (s *Store) PendingRequestCount(ctx context.Context) (int, error) {
 	return n, err
 }
 
+// PendingRequestCountOf counts one user's pending requests.
+func (s *Store) PendingRequestCountOf(ctx context.Context, userID string) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tunnel_requests WHERE status = 'pending' AND user_id = ?`, userID).Scan(&n)
+	return n, err
+}
+
 // ResolveTunnelRequest moves a pending request to approved / rejected / cancelled. ErrNotFound when
 // it is no longer pending.
 func (s *Store) ResolveTunnelRequest(ctx context.Context, id, status, note string, reviewer *string, tunnelID *string, now int64) error {
