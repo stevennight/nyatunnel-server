@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -205,13 +206,35 @@ func (h *Hub) ProtoTunnel(t *store.Tunnel) tunnelproto.Tunnel {
 		ID: t.ID, Name: t.Name, Type: t.Type, PublicURL: h.PublicURL(t), LocalIP: t.LocalIP, LocalPort: t.LocalPort,
 		Enabled: t.Enabled, PausedByClient: t.PausedByClient,
 		Permissions: tunnelproto.Permissions{EditLocal: t.ClientCanEditLocal, LoopbackOnly: t.LocalLoopbackOnly, Toggle: t.ClientCanToggle},
-		Display:     tunnelproto.Display{AccessPolicy: "public"},
+		Display:     tunnelproto.Display{AccessPolicy: t.AccessPolicy, Limits: limitsSummary(t)},
 	}
 	if t.ExpiresAt != nil {
 		at := time.UnixMilli(*t.ExpiresAt).UTC()
 		pt.ExpiresAt = &at
 	}
 	return pt
+}
+
+// limitsSummary is the human-readable line the GUI shows under a tunnel.
+func limitsSummary(t *store.Tunnel) string {
+	var parts []string
+	if t.BandwidthKbps > 0 {
+		if t.BandwidthKbps >= 1000 {
+			parts = append(parts, fmt.Sprintf("%g Mbps", float64(t.BandwidthKbps)/1000))
+		} else {
+			parts = append(parts, fmt.Sprintf("%d kbps", t.BandwidthKbps))
+		}
+	}
+	if t.MaxConns > 0 {
+		parts = append(parts, fmt.Sprintf("%d 连接", t.MaxConns))
+	}
+	if t.MonthlyQuotaMB > 0 {
+		parts = append(parts, fmt.Sprintf("每月 %d MB", t.MonthlyQuotaMB))
+	}
+	if t.IPAllowlist != "" {
+		parts = append(parts, "IP 白名单")
+	}
+	return strings.Join(parts, " · ")
 }
 
 // ErrOffline means the tunnel's device has no session.

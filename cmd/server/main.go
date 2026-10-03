@@ -107,7 +107,14 @@ func serve(cfg config.Config, log *slog.Logger) error {
 		},
 		Audit: api.AuditFunc(st, log, time.Now),
 	})
-	ed = edge.New(edge.Options{Store: st, Dialer: h, Log: log, RealIP: resolver, BindAddr: cfg.PortBindAddr})
+	gateKey, err := gateKey(ctx, st)
+	if err != nil {
+		return err
+	}
+	ed = edge.New(edge.Options{
+		Store: st, Dialer: h, Log: log, RealIP: resolver, BindAddr: cfg.PortBindAddr, GateKey: gateKey,
+		ConsoleURL: cfg.PublicURL, Audit: api.AuditFunc(st, log, time.Now),
+	})
 	if err := ed.Reload(ctx); err != nil {
 		return err
 	}
@@ -140,6 +147,7 @@ func serve(cfg config.Config, log *slog.Logger) error {
 	log.Info("shutting down")
 	h.Close()
 	ed.Close()
+	ed.Flush(context.Background())
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	for _, srv := range []*http.Server{console, ingress, internal} {
@@ -164,6 +172,22 @@ func setupTokenIfNeeded(ctx context.Context, st *store.Store, log *slog.Logger) 
 	return token, nil
 }
 
+// gateKey returns the key that signs tunnel access cookies, creating it on first start.
+func gateKey(ctx context.Context, st *store.Store) ([]byte, error) {
+	v, err := st.Setting(ctx, "gate_key")
+	if err != nil {
+		return nil, err
+	}
+	if key, err := base64.StdEncoding.DecodeString(v); err == nil && len(key) == 32 {
+		return key, nil
+	}
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		return nil, err
+	}
+	return key, st.SetSetting(ctx, "gate_key", base64.StdEncoding.EncodeToString(key))
+}
+
 func housekeeping(ctx context.Context, st *store.Store, log *slog.Logger) {
 	t := time.NewTicker(time.Hour)
 	defer t.Stop()
@@ -174,6 +198,7 @@ func housekeeping(ctx context.Context, st *store.Store, log *slog.Logger) {
 		}
 		_ = st.DeleteStaleEnrollments(ctx, now.Add(-7*24*time.Hour).UnixMilli())
 		_ = st.DeleteAuditBefore(ctx, now.Add(-180*24*time.Hour).UnixMilli())
+		_ = st.DeleteTrafficBefore(ctx, now.Add(-400*24*time.Hour).UnixMilli())
 		select {
 		case <-ctx.Done():
 			return

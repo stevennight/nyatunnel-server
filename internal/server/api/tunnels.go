@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/stevennight/nyatunnel-common/tunnelproto"
 
 	"nyatunnel-server/internal/server/auth"
+	"nyatunnel-server/internal/server/edge"
 	"nyatunnel-server/internal/server/rules"
 	"nyatunnel-server/internal/server/store"
 )
@@ -37,17 +39,33 @@ type tunnelView struct {
 	ExpiresAt          *int64  `json:"expiresAt"`
 	CreatedAt          int64   `json:"createdAt"`
 	UpdatedAt          int64   `json:"updatedAt"`
-	// State is running, offline, paused, disabled, expired, unassigned or error.
+	AccessPolicy       string  `json:"accessPolicy"`
+	BasicUsername      string  `json:"basicUsername"`
+	HasPassword        bool    `json:"hasPassword"`
+	IPAllowlist        string  `json:"ipAllowlist"`
+	Interstitial       bool    `json:"interstitial"`
+	HostRewrite        string  `json:"hostRewrite"`
+	BandwidthKbps      int     `json:"bandwidthKbps"`
+	MaxConns           int     `json:"maxConns"`
+	MonthlyQuotaMB     int     `json:"monthlyQuotaMb"`
+	QuotaAction        string  `json:"quotaAction"`
+	MonthBytes         int64   `json:"monthBytes"`
+	ActiveConns        int64   `json:"activeConns"`
+	// State is running, offline, paused, disabled, expired, over_quota, unassigned or error.
 	State      string `json:"state"`
 	StateError string `json:"stateError,omitempty"`
 }
 
-func (s *server) viewTunnel(t *store.Tunnel, users, devices map[string]string) tunnelView {
+func (s *server) viewTunnel(t *store.Tunnel, users, devices map[string]string, month map[string]store.TrafficTotal) tunnelView {
 	v := tunnelView{
 		ID: t.ID, UserID: t.UserID, Username: users[t.UserID], DeviceID: t.DeviceID, Name: t.Name, Type: t.Type, DomainID: t.DomainID,
 		Subdomain: t.Subdomain, Host: t.Host, RemotePort: t.RemotePort, PublicURL: s.Hub.PublicURL(t), LocalIP: t.LocalIP, LocalPort: t.LocalPort,
 		ClientCanEditLocal: t.ClientCanEditLocal, LocalLoopbackOnly: t.LocalLoopbackOnly, ClientCanToggle: t.ClientCanToggle,
 		Enabled: t.Enabled, PausedByClient: t.PausedByClient, Note: t.Note, ExpiresAt: t.ExpiresAt, CreatedAt: t.CreatedAt, UpdatedAt: t.UpdatedAt,
+		AccessPolicy: t.AccessPolicy, BasicUsername: t.BasicUsername, HasPassword: t.AccessPasswordHash != "", IPAllowlist: t.IPAllowlist,
+		Interstitial: t.Interstitial, HostRewrite: t.HostRewrite, BandwidthKbps: t.BandwidthKbps, MaxConns: t.MaxConns,
+		MonthlyQuotaMB: t.MonthlyQuotaMB, QuotaAction: t.QuotaAction,
+		MonthBytes: month[t.ID].Bytes() + s.Edge.PendingTraffic(t.ID), ActiveConns: s.Edge.Active(t.ID),
 	}
 	now := s.now().UnixMilli()
 	switch {
@@ -55,6 +73,8 @@ func (s *server) viewTunnel(t *store.Tunnel, users, devices map[string]string) t
 		v.State = "disabled"
 	case t.ExpiresAt != nil && now >= *t.ExpiresAt:
 		v.State = "expired"
+	case s.Edge.OverQuota(t.ID):
+		v.State = "over_quota"
 	case t.DeviceID == nil:
 		v.State = "unassigned"
 	case t.PausedByClient:
@@ -76,6 +96,14 @@ func (s *server) viewTunnel(t *store.Tunnel, users, devices map[string]string) t
 	return v
 }
 
+func (s *server) monthTraffic(r *http.Request) map[string]store.TrafficTotal {
+	m, err := s.Store.TrafficByTunnel(r.Context(), edge.MonthStart(s.now()))
+	if err != nil {
+		s.Log.Warn("month traffic", "err", err)
+	}
+	return m
+}
+
 func (s *server) deviceNames(r *http.Request) map[string]string {
 	ds, _ := s.Store.Devices(r.Context(), "")
 	out := map[string]string{}
@@ -95,10 +123,10 @@ func (s *server) handleListTunnels(w http.ResponseWriter, r *http.Request, p *pr
 		s.fail(w, "list tunnels", err)
 		return
 	}
-	users, devices := s.usernames(r), s.deviceNames(r)
+	users, devices, month := s.usernames(r), s.deviceNames(r), s.monthTraffic(r)
 	out := make([]tunnelView, 0, len(tunnels))
 	for _, t := range tunnels {
-		out = append(out, s.viewTunnel(t, users, devices))
+		out = append(out, s.viewTunnel(t, users, devices, month))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"tunnels": out})
 }
@@ -120,6 +148,17 @@ type tunnelInput struct {
 	Enabled            bool    `json:"enabled"`
 	Note               string  `json:"note"`
 	ExpiresAt          *int64  `json:"expiresAt"`
+
+	AccessPolicy   string  `json:"accessPolicy"`
+	AccessPassword *string `json:"accessPassword"` // nil or "" keeps the current password
+	BasicUsername  string  `json:"basicUsername"`
+	IPAllowlist    string  `json:"ipAllowlist"`
+	Interstitial   bool    `json:"interstitial"`
+	HostRewrite    string  `json:"hostRewrite"`
+	BandwidthKbps  int     `json:"bandwidthKbps"`
+	MaxConns       int     `json:"maxConns"`
+	MonthlyQuotaMB int     `json:"monthlyQuotaMb"`
+	QuotaAction    string  `json:"quotaAction"`
 }
 
 func (s *server) handleCreateTunnel(w http.ResponseWriter, r *http.Request, p *principal) {
@@ -139,7 +178,7 @@ func (s *server) handleCreateTunnel(w http.ResponseWriter, r *http.Request, p *p
 	}
 	s.changed(r.Context(), deref(t.DeviceID))
 	s.audit(r, p, "tunnel.create", t.ID, t.Name+" "+s.Hub.PublicURL(t))
-	writeJSON(w, http.StatusCreated, map[string]any{"tunnel": s.viewTunnel(t, s.usernames(r), s.deviceNames(r))})
+	writeJSON(w, http.StatusCreated, map[string]any{"tunnel": s.viewTunnel(t, s.usernames(r), s.deviceNames(r), s.monthTraffic(r))})
 }
 
 func (s *server) handleUpdateTunnel(w http.ResponseWriter, r *http.Request, p *principal) {
@@ -163,7 +202,7 @@ func (s *server) handleUpdateTunnel(w http.ResponseWriter, r *http.Request, p *p
 	}
 	s.changed(r.Context(), deref(old.DeviceID), deref(t.DeviceID))
 	s.audit(r, p, "tunnel.update", t.ID, t.Name+" "+s.Hub.PublicURL(&t))
-	writeJSON(w, http.StatusOK, map[string]any{"tunnel": s.viewTunnel(&t, s.usernames(r), s.deviceNames(r))})
+	writeJSON(w, http.StatusOK, map[string]any{"tunnel": s.viewTunnel(&t, s.usernames(r), s.deviceNames(r), s.monthTraffic(r))})
 }
 
 func (s *server) handleDeleteTunnel(w http.ResponseWriter, r *http.Request, p *principal) {
@@ -268,6 +307,78 @@ func (s *server) applyTunnelInput(w http.ResponseWriter, r *http.Request, t *sto
 	default:
 		return bad("invalid_type", "类型必须是 https、tcp 或 udp")
 	}
+	return s.applyPolicy(w, t, in, old)
+}
+
+var hostRewriteRE = regexp.MustCompile(`^[A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?$`)
+
+// applyPolicy validates the access policy and limits.
+func (s *server) applyPolicy(w http.ResponseWriter, t *store.Tunnel, in *tunnelInput, old *store.Tunnel) bool {
+	bad := func(code, msg string) bool {
+		writeError(w, http.StatusBadRequest, code, msg)
+		return false
+	}
+	policy := in.AccessPolicy
+	if policy == "" {
+		policy = store.PolicyPublic
+	}
+	switch policy {
+	case store.PolicyPublic, store.PolicyPassword, store.PolicyBasic, store.PolicyLogin:
+	default:
+		return bad("invalid_policy", "访问策略无效")
+	}
+	if t.Type != store.TypeHTTPS && policy != store.PolicyPublic {
+		return bad("policy_https_only", "访问密码 / Basic / 登录门禁只适用于 HTTPS 隧道；TCP / UDP 请使用 IP 白名单")
+	}
+	if t.Type != store.TypeHTTPS && (in.Interstitial || in.HostRewrite != "") {
+		return bad("policy_https_only", "首次访问提示页与 Host 改写只适用于 HTTPS 隧道")
+	}
+	if _, err := edge.ParseAllowlist(in.IPAllowlist); err != nil {
+		return bad("invalid_allowlist", "IP 白名单格式不正确，应为 IP 或 CIDR，用逗号分隔")
+	}
+	if in.HostRewrite != "" && !hostRewriteRE.MatchString(in.HostRewrite) {
+		return bad("invalid_host_rewrite", "Host 改写应为主机名，可带端口")
+	}
+	if in.BandwidthKbps < 0 || in.MaxConns < 0 || in.MonthlyQuotaMB < 0 {
+		return bad("invalid_limit", "限制不能为负数")
+	}
+	if in.QuotaAction == "" {
+		in.QuotaAction = "pause"
+	}
+	if in.QuotaAction != "pause" && in.QuotaAction != "alert" {
+		return bad("invalid_quota_action", "超额动作必须是 pause 或 alert")
+	}
+
+	rev := t.PolicyRev
+	if old != nil && (old.AccessPolicy != policy || old.BasicUsername != in.BasicUsername) {
+		rev++
+	}
+	hash := t.AccessPasswordHash
+	if policy == store.PolicyPassword || policy == store.PolicyBasic {
+		if in.AccessPassword != nil && *in.AccessPassword != "" {
+			if len([]rune(*in.AccessPassword)) < 6 {
+				return bad("weak_access_password", "访问密码至少 6 个字符")
+			}
+			h, err := auth.HashSecret(*in.AccessPassword)
+			if err != nil {
+				s.fail(w, "access password", err)
+				return false
+			}
+			hash = h
+			rev++
+		}
+		if hash == "" {
+			return bad("access_password_required", "请设置访问密码")
+		}
+	} else {
+		hash = ""
+	}
+	if policy == store.PolicyBasic && strings.TrimSpace(in.BasicUsername) == "" {
+		return bad("basic_username_required", "请设置 Basic 认证用户名")
+	}
+	t.AccessPolicy, t.AccessPasswordHash, t.BasicUsername, t.PolicyRev = policy, hash, strings.TrimSpace(in.BasicUsername), rev
+	t.IPAllowlist, t.Interstitial, t.HostRewrite = strings.TrimSpace(in.IPAllowlist), in.Interstitial, strings.TrimSpace(in.HostRewrite)
+	t.BandwidthKbps, t.MaxConns, t.MonthlyQuotaMB, t.QuotaAction = in.BandwidthKbps, in.MaxConns, in.MonthlyQuotaMB, in.QuotaAction
 	return true
 }
 

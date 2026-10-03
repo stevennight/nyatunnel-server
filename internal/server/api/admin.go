@@ -71,6 +71,34 @@ func (s *server) handlePutSettings(w http.ResponseWriter, r *http.Request, p *pr
 	s.handleGetSettings(w, r, p)
 }
 
+// handleTraffic returns an hourly series for one tunnel, one user or everything. Normal users only
+// see their own traffic.
+func (s *server) handleTraffic(w http.ResponseWriter, r *http.Request, p *principal) {
+	q := r.URL.Query()
+	tunnelID, userID := q.Get("tunnelId"), q.Get("userId")
+	hours, _ := strconv.Atoi(q.Get("hours"))
+	if hours <= 0 || hours > 24*92 {
+		hours = 24
+	}
+	if !p.admin() {
+		if tunnelID != "" {
+			t, err := s.Store.TunnelByID(r.Context(), tunnelID)
+			if err != nil || t.UserID != p.user.ID {
+				writeError(w, http.StatusNotFound, "not_found", "")
+				return
+			}
+		}
+		userID = p.user.ID
+	}
+	since := s.now().Add(-time.Duration(hours) * time.Hour).Truncate(time.Hour).UnixMilli()
+	series, err := s.Store.TrafficSeries(r.Context(), tunnelID, userID, since)
+	if err != nil {
+		s.fail(w, "traffic", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"series": series})
+}
+
 // handleDashboard summarises the system for the admin overview.
 func (s *server) handleDashboard(w http.ResponseWriter, r *http.Request, p *principal) {
 	ctx := r.Context()
@@ -91,10 +119,10 @@ func (s *server) handleDashboard(w http.ResponseWriter, r *http.Request, p *prin
 	}
 	byType := map[string]int{}
 	running := 0
-	names, devNames := s.usernames(r), s.deviceNames(r)
+	names, devNames, month := s.usernames(r), s.deviceNames(r), s.monthTraffic(r)
 	for _, t := range tunnels {
 		byType[t.Type]++
-		if s.viewTunnel(t, names, devNames).State == "running" {
+		if s.viewTunnel(t, names, devNames, month).State == "running" {
 			running++
 		}
 	}
@@ -115,7 +143,19 @@ func (s *server) handleDashboard(w http.ResponseWriter, r *http.Request, p *prin
 		}
 	}
 	tcp, udp := s.Edge.ListenerPorts()
+	series, _ := s.Store.TrafficSeries(ctx, "", "", s.now().Add(-24*time.Hour).Truncate(time.Hour).UnixMilli())
+	var traffic24h int64
+	for _, p := range series {
+		traffic24h += p.BytesIn + p.BytesOut
+	}
+	var monthTotal int64
+	for _, t := range month {
+		monthTotal += t.Bytes()
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
+		"traffic24h":     traffic24h,
+		"trafficMonth":   monthTotal,
+		"trafficSeries":  series,
 		"users":          len(users),
 		"devices":        active,
 		"devicesOnline":  s.Hub.OnlineCount(),

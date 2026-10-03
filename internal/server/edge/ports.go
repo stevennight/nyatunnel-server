@@ -70,16 +70,22 @@ func (l *portListener) track(c net.Conn, add bool) {
 func (l *portListener) handle(c net.Conn) {
 	defer c.Close()
 	r := l.route.Load()
-	if !r.live(l.e.opt.Now()) {
+	if !r.live(l.e.opt.Now()) || !r.allowed(hostOf(c.RemoteAddr())) {
+		return
+	}
+	m, ok := l.e.acquire(r)
+	if !ok {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	stream, err := l.e.opt.Dialer.Dial(ctx, r.DeviceID, r.TunnelID, "tcp", c.RemoteAddr().String())
+	raw, err := l.e.opt.Dialer.Dial(ctx, r.DeviceID, r.TunnelID, "tcp", c.RemoteAddr().String())
 	cancel()
 	if err != nil {
+		m.active.Add(-1)
 		l.e.opt.Log.Debug("edge: tcp dial", "tunnel", r.TunnelID, "err", err)
 		return
 	}
+	stream := l.e.metered(raw, m)
 	defer stream.Close()
 	l.track(c, true)
 	defer l.track(c, false)
@@ -94,6 +100,14 @@ func (l *portListener) close() {
 		c.Close()
 	}
 	l.mu.Unlock()
+}
+
+func hostOf(a net.Addr) string {
+	h, _, err := net.SplitHostPort(a.String())
+	if err != nil {
+		return a.String()
+	}
+	return h
 }
 
 // pipe copies both ways until either side is done, then closes both.
@@ -177,16 +191,21 @@ func (l *udpListener) peer(addr net.Addr) *udpPeer {
 		return p
 	}
 	r := l.route.Load()
-	if !r.live(l.e.opt.Now()) {
+	if !r.live(l.e.opt.Now()) || !r.allowed(hostOf(addr)) {
+		return nil
+	}
+	m, ok := l.e.acquire(r)
+	if !ok {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	stream, err := l.e.opt.Dialer.Dial(ctx, r.DeviceID, r.TunnelID, "udp", key)
+	raw, err := l.e.opt.Dialer.Dial(ctx, r.DeviceID, r.TunnelID, "udp", key)
 	cancel()
 	if err != nil {
+		m.active.Add(-1)
 		return nil
 	}
-	p = &udpPeer{stream: stream}
+	p = &udpPeer{stream: l.e.metered(raw, m)}
 	p.last.Store(time.Now().UnixNano())
 	l.mu.Lock()
 	l.peers[key] = p

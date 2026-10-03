@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"errors"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -52,6 +53,25 @@ func (s *server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 		out["user"] = v
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// handleTunnelLogin is where a login-gated tunnel sends visitors: signed-in accounts are handed back
+// to the tunnel with a one-minute token; others go through the console login first.
+func (s *server) handleTunnelLogin(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	tunnelID, cb, ret := q.Get("t"), q.Get("cb"), q.Get("r")
+	if !s.Edge.LoginCallbackOK(tunnelID, cb) {
+		writeError(w, http.StatusBadRequest, "invalid_gate_request", "")
+		return
+	}
+	p, err := s.authenticate(w, r)
+	if err != nil {
+		http.Redirect(w, r, "/login?next="+url.QueryEscape(r.URL.RequestURI()), http.StatusFound)
+		return
+	}
+	s.audit(r, p, "tunnel.gate_login", tunnelID, "")
+	target := cb + "?" + url.Values{"token": {s.Edge.IssueLoginToken(tunnelID, p.user.ID)}, "r": {ret}}.Encode()
+	http.Redirect(w, r, target, http.StatusFound)
 }
 
 // handleSetup creates the first administrator. It needs the setup token from the server log, so

@@ -76,7 +76,8 @@ func newEnv(t *testing.T) *testEnv {
 	resolver := &realip.Resolver{Trusted: []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32")}}
 	env.hub = hub.New(hub.Options{Store: st, Log: log, PublicHost: cfg.PublicHost, TCPHost: "127.0.0.1",
 		OnChange: func() { env.edge.Reload(context.Background()) }, Audit: AuditFunc(st, log, time.Now)})
-	env.edge = edge.New(edge.Options{Store: st, Dialer: env.hub, Log: log, RealIP: resolver, BindAddr: "127.0.0.1"})
+	env.edge = edge.New(edge.Options{Store: st, Dialer: env.hub, Log: log, RealIP: resolver, BindAddr: "127.0.0.1",
+		GateKey: bytes.Repeat([]byte{2}, 32), ConsoleURL: env.console.URL, Audit: AuditFunc(st, log, time.Now)})
 	t.Cleanup(env.edge.Close)
 	t.Cleanup(env.hub.Close)
 	handler = New(Options{Config: cfg, Store: st, Hub: env.hub, Edge: env.edge, Secrets: box, Log: log, SetupToken: testSetupToken})
@@ -225,7 +226,10 @@ func (d *fakeDevice) serve(s net.Conn) {
 	}
 	defer local.Close()
 	tunnelproto.WriteStreamReply(s, tunnelproto.ReplyOK)
-	go io.Copy(local, s)
+	go func() {
+		io.Copy(local, s)
+		local.(*net.TCPConn).CloseWrite() // like the real agent: pass the visitor's EOF on
+	}()
 	io.Copy(s, local)
 }
 

@@ -82,6 +82,8 @@ func New(opts Options) http.Handler {
 	mux.Handle("POST /api/v1/enrollments", s.user(s.handleCreateEnrollment))
 	mux.Handle("GET /api/v1/tunnels", s.user(s.handleListTunnels))
 	mux.Handle("GET /api/v1/domains", s.user(s.handleListDomains))
+	mux.Handle("GET /api/v1/traffic", s.user(s.handleTraffic))
+	mux.HandleFunc("GET /tunnel-login", s.handleTunnelLogin)
 
 	// Administrators.
 	mux.Handle("GET /api/v1/users", s.admin(s.handleListUsers))

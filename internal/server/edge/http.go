@@ -17,6 +17,8 @@ import (
 	"nyatunnel-server/internal/server/hub"
 )
 
+var errTooManyConns = errors.New("edge: connection limit reached")
+
 type ctxKey int
 
 const (
@@ -41,7 +43,16 @@ func newHTTPProxy(e *Edge) *httpProxy {
 			if r == nil {
 				return nil, errors.New("edge: no route in context")
 			}
-			return e.opt.Dialer.Dial(ctx, r.DeviceID, r.TunnelID, "tcp", client)
+			m, ok := e.acquire(r)
+			if !ok {
+				return nil, errTooManyConns
+			}
+			c, err := e.opt.Dialer.Dial(ctx, r.DeviceID, r.TunnelID, "tcp", client)
+			if err != nil {
+				m.active.Add(-1)
+				return nil, err
+			}
+			return e.metered(c, m), nil
 		},
 		MaxIdleConnsPerHost:   32,
 		IdleConnTimeout:       60 * time.Second,
@@ -55,6 +66,9 @@ func newHTTPProxy(e *Edge) *httpProxy {
 			r := pr.In.Context().Value(routeKey).(*route)
 			pr.SetURL(&url.URL{Scheme: "http", Host: r.TunnelID + ":80"})
 			pr.Out.Host = pr.In.Host // the local service sees the public host name
+			if r.HostRewrite != "" {
+				pr.Out.Host = r.HostRewrite
+			}
 			client, _ := pr.In.Context().Value(clientKey).(string)
 			pr.Out.Header.Set("X-Forwarded-For", client)
 			pr.Out.Header.Set("X-Real-IP", client)
@@ -63,6 +77,8 @@ func newHTTPProxy(e *Edge) *httpProxy {
 		},
 		ErrorHandler: func(w http.ResponseWriter, req *http.Request, err error) {
 			switch {
+			case errors.Is(err, errTooManyConns):
+				errorPage(w, http.StatusServiceUnavailable, "连接数已满", "这个隧道的并发连接已达上限，请稍后再试。")
 			case errors.Is(err, hub.ErrOffline):
 				errorPage(w, http.StatusBadGateway, "设备离线", "提供这个地址的设备目前不在线，请稍后再试。")
 			case errors.Is(err, tunnelproto.ReplyDialFailed):
@@ -92,15 +108,26 @@ func (e *Edge) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	if !r.live(e.opt.Now()) {
-		if r.DeviceID == "" {
+		switch {
+		case r.DeviceID == "":
 			errorPage(w, http.StatusServiceUnavailable, "隧道未就绪", "这个隧道还没有分配设备。")
-		} else {
+		case r.OverQuota:
+			errorPage(w, http.StatusServiceUnavailable, "流量已用完", "这个隧道本月的流量配额已用完。")
+		default:
 			errorPage(w, http.StatusServiceUnavailable, "隧道已暂停", "这个隧道目前没有启用或已过期。")
 		}
 		return
 	}
+	client := e.opt.RealIP.ClientIP(req)
+	if !r.allowed(client) {
+		errorPage(w, http.StatusForbidden, "禁止访问", "你的网络地址不在这个隧道的访问白名单内。")
+		return
+	}
+	if !e.gate.check(w, req, r, client) {
+		return
+	}
 	ctx := context.WithValue(req.Context(), routeKey, r)
-	ctx = context.WithValue(ctx, clientKey, e.opt.RealIP.ClientIP(req))
+	ctx = context.WithValue(ctx, clientKey, client)
 	e.proxy.rp.ServeHTTP(w, req.WithContext(ctx))
 }
 

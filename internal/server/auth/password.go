@@ -37,6 +37,11 @@ func HashPassword(password string) (string, error) {
 	if len([]rune(password)) < MinPasswordLength {
 		return "", ErrWeakPassword
 	}
+	return HashSecret(password)
+}
+
+// HashSecret hashes like HashPassword without the length policy (tunnel access passwords).
+func HashSecret(password string) (string, error) {
 	if len(password) > maxPasswordBytes {
 		return "", errors.New("password is too long")
 	}

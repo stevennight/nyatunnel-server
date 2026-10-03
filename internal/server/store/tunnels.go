@@ -34,7 +34,30 @@ type Tunnel struct {
 	ExpiresAt          *int64
 	CreatedAt          int64
 	UpdatedAt          int64
+
+	// Access policy for HTTPS tunnels (docs/设计方案.md §6.2).
+	AccessPolicy       string // public, password, basic, login
+	AccessPasswordHash string
+	BasicUsername      string
+	PolicyRev          int64 // bumped when credentials change, invalidating gate cookies
+	IPAllowlist        string
+	Interstitial       bool
+	HostRewrite        string
+
+	// Limits; 0 means unlimited.
+	BandwidthKbps  int
+	MaxConns       int
+	MonthlyQuotaMB int
+	QuotaAction    string // pause, alert
 }
+
+// Access policies.
+const (
+	PolicyPublic   = "public"
+	PolicyPassword = "password"
+	PolicyBasic    = "basic"
+	PolicyLogin    = "login"
+)
 
 // Live reports whether the tunnel should carry traffic at now (ignoring whether its device is online).
 func (t *Tunnel) Live(now int64) bool {
@@ -42,13 +65,17 @@ func (t *Tunnel) Live(now int64) bool {
 }
 
 const tunnelCols = `id, user_id, device_id, name, type, domain_id, subdomain, host, remote_port, local_ip, local_port,
-	client_can_edit_local, local_loopback_only, client_can_toggle, enabled, paused_by_client, note, expires_at, created_at, updated_at`
+	client_can_edit_local, local_loopback_only, client_can_toggle, enabled, paused_by_client, note, expires_at, created_at, updated_at,
+	access_policy, access_password_hash, basic_username, policy_rev, ip_allowlist, interstitial, host_rewrite,
+	bandwidth_kbps, max_conns, monthly_quota_mb, quota_action`
 
 func scanTunnel(row interface{ Scan(...any) error }) (*Tunnel, error) {
 	var t Tunnel
 	if err := row.Scan(&t.ID, &t.UserID, &t.DeviceID, &t.Name, &t.Type, &t.DomainID, &t.Subdomain, &t.Host, &t.RemotePort,
 		&t.LocalIP, &t.LocalPort, &t.ClientCanEditLocal, &t.LocalLoopbackOnly, &t.ClientCanToggle, &t.Enabled, &t.PausedByClient,
-		&t.Note, &t.ExpiresAt, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		&t.Note, &t.ExpiresAt, &t.CreatedAt, &t.UpdatedAt,
+		&t.AccessPolicy, &t.AccessPasswordHash, &t.BasicUsername, &t.PolicyRev, &t.IPAllowlist, &t.Interstitial, &t.HostRewrite,
+		&t.BandwidthKbps, &t.MaxConns, &t.MonthlyQuotaMB, &t.QuotaAction); err != nil {
 		return nil, notFoundOr(err)
 	}
 	return &t, nil
@@ -96,14 +123,29 @@ func (s *Store) SaveTunnel(ctx context.Context, t *Tunnel) error {
 		h := strings.ToLower(*t.Host)
 		t.Host = &h
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO tunnels (`+tunnelCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	if t.AccessPolicy == "" {
+		t.AccessPolicy = PolicyPublic
+	}
+	if t.QuotaAction == "" {
+		t.QuotaAction = "pause"
+	}
+	if t.PolicyRev == 0 {
+		t.PolicyRev = 1
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO tunnels (`+tunnelCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET user_id = excluded.user_id, device_id = excluded.device_id, name = excluded.name, type = excluded.type,
 		domain_id = excluded.domain_id, subdomain = excluded.subdomain, host = excluded.host, remote_port = excluded.remote_port,
 		local_ip = excluded.local_ip, local_port = excluded.local_port, client_can_edit_local = excluded.client_can_edit_local,
 		local_loopback_only = excluded.local_loopback_only, client_can_toggle = excluded.client_can_toggle, enabled = excluded.enabled,
-		paused_by_client = excluded.paused_by_client, note = excluded.note, expires_at = excluded.expires_at, updated_at = excluded.updated_at`,
+		paused_by_client = excluded.paused_by_client, note = excluded.note, expires_at = excluded.expires_at, updated_at = excluded.updated_at,
+		access_policy = excluded.access_policy, access_password_hash = excluded.access_password_hash, basic_username = excluded.basic_username,
+		policy_rev = excluded.policy_rev, ip_allowlist = excluded.ip_allowlist, interstitial = excluded.interstitial, host_rewrite = excluded.host_rewrite,
+		bandwidth_kbps = excluded.bandwidth_kbps, max_conns = excluded.max_conns, monthly_quota_mb = excluded.monthly_quota_mb,
+		quota_action = excluded.quota_action`,
 		t.ID, t.UserID, t.DeviceID, t.Name, t.Type, t.DomainID, t.Subdomain, t.Host, t.RemotePort, t.LocalIP, t.LocalPort,
-		t.ClientCanEditLocal, t.LocalLoopbackOnly, t.ClientCanToggle, t.Enabled, t.PausedByClient, t.Note, t.ExpiresAt, t.CreatedAt, t.UpdatedAt)
+		t.ClientCanEditLocal, t.LocalLoopbackOnly, t.ClientCanToggle, t.Enabled, t.PausedByClient, t.Note, t.ExpiresAt, t.CreatedAt, t.UpdatedAt,
+		t.AccessPolicy, t.AccessPasswordHash, t.BasicUsername, t.PolicyRev, t.IPAllowlist, t.Interstitial, t.HostRewrite,
+		t.BandwidthKbps, t.MaxConns, t.MonthlyQuotaMB, t.QuotaAction)
 	return conflictOr(err)
 }
 
