@@ -40,7 +40,7 @@ type Options struct {
 	Notify func(kind, title, text string)
 	// SurgeMBPerHour returns the hourly traffic per tunnel above which a surge is reported (0 = off).
 	SurgeMBPerHour func(ctx context.Context) int
-	Now   func() time.Time
+	Now            func() time.Time
 	// Listen opens TCP listeners; tests replace it.
 	Listen func(network, addr string) (net.Listener, error)
 	// ListenPacket opens UDP sockets; tests replace it.

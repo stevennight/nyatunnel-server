@@ -55,8 +55,8 @@ func (s *server) handleListChannels(w http.ResponseWriter, r *http.Request, p *p
 }
 
 type channelInput struct {
-	Kind    string `json:"kind"`
-	Name    string `json:"name"`
+	Kind    string   `json:"kind"`
+	Name    string   `json:"name"`
 	Events  []string `json:"events"`
 	Enabled bool     `json:"enabled"`
 	// Config replaces the stored secrets when given (omitted on edits that keep them).
