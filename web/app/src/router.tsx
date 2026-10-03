@@ -4,10 +4,12 @@ import type { ComponentType } from 'react'
 import { AppFrame } from './components/layout'
 import { Notice } from './components/ui'
 import { AuditPage } from './pages/audit'
+import { ChannelsPage } from './pages/channels'
 import { DashboardPage } from './pages/dashboard'
 import { DevicesPage } from './pages/devices'
 import { DomainsPage } from './pages/domains'
 import { PortPoolsPage } from './pages/port-pools'
+import { RequestsPage } from './pages/requests'
 import { SecurityPage } from './pages/security'
 import { SettingsPage } from './pages/settings'
 import { TunnelsPage } from './pages/tunnels'
@@ -52,11 +54,15 @@ const routeTree = rootRoute.addChildren([
   createRoute({ getParentRoute, path: '/users', component: adminOnly(UsersPage) }),
   createRoute({ getParentRoute, path: '/tunnels', component: TunnelsPage }),
   createRoute({ getParentRoute, path: '/devices', component: DevicesPage }),
-  createRoute({ getParentRoute, path: '/domains', component: adminOnly(DomainsPage) }),
+  createRoute({ getParentRoute, path: '/requests', component: RequestsPage }),
+  createRoute({ getParentRoute, path: '/domains', component: DomainsPage }),
   createRoute({ getParentRoute, path: '/port-pools', component: adminOnly(PortPoolsPage) }),
   createRoute({ getParentRoute, path: '/audit', component: adminOnly(AuditPage) }),
+  createRoute({ getParentRoute, path: '/channels', component: adminOnly(ChannelsPage) }),
   createRoute({ getParentRoute, path: '/settings', component: adminOnly(SettingsPage) }),
   createRoute({ getParentRoute, path: '/security', component: SecurityPage }),
+  // Signed out, AppFrame shows the login screen here; signed in, it hands off to `next`.
+  createRoute({ getParentRoute, path: '/login', component: Home }),
 ])
 
 // A factory (rather than only a singleton) so tests can supply a memory history.

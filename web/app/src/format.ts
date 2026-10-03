@@ -78,3 +78,37 @@ export function downloadText(filename: string, text: string) {
   a.remove()
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
+
+/** 1536 → "1.5 KB" (binary units, like the server's MB quotas). */
+export function bytes(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let i = 0
+  let v = n
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024
+    i++
+  }
+  return `${i === 0 ? v : v >= 100 ? Math.round(v) : v.toFixed(1).replace(/\.0$/, '')} ${units[i]}`
+}
+
+/** A MB quota for display: 51200 → "50 GB", 500 → "500 MB". */
+export function quotaMb(mb: number): string {
+  return bytes(mb * 1024 * 1024)
+}
+
+/** Number input helpers: '' → 0, invalid → NaN. */
+export function parseAmount(v: string): number {
+  const t = v.trim()
+  if (!t) return 0
+  const n = Number(t)
+  return Number.isFinite(n) && n >= 0 ? n : NaN
+}
+
+/** kbps ↔ Mbps (the server meters 1 kbps = 1000 bit/s). */
+export const kbpsToMbps = (kbps: number) => (kbps > 0 ? String(kbps / 1000) : '')
+export const mbpsToKbps = (mbps: number) => Math.round(mbps * 1000)
+
+/** MB ↔ GB for quota inputs (1 GB = 1024 MB). */
+export const mbToGb = (mb: number) => (mb > 0 ? String(Math.round((mb / 1024) * 100) / 100) : '')
+export const gbToMb = (gb: number) => Math.round(gb * 1024)

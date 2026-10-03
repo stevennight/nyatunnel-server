@@ -53,6 +53,7 @@ export function EnrollDialog({
     onSuccess: (r) => {
       setResult(r)
       void client.invalidateQueries({ queryKey: ['audit'] })
+      void client.invalidateQueries({ queryKey: ['enrollments'] })
     },
   })
 
@@ -98,7 +99,7 @@ export function EnrollDialog({
             <label htmlFor="enroll-name">设备名（建议）</label>
             <input id="enroll-name" className="inp" placeholder="例如 home-server（可选）" maxLength={64} value={nameHint} onChange={(e) => setNameHint(e.target.value)} />
           </div>
-          <div className="row top">
+          <div className="row align-top">
             <span className="label">预分配隧道</span>
             <div>
               {unassigned.length === 0 ? (

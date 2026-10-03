@@ -330,7 +330,7 @@ func (s *server) applyTunnelInput(w http.ResponseWriter, r *http.Request, t *sto
 			return bad("invalid_domain", "域名不存在")
 		}
 		if d.Kind == store.DomainCustom {
-			if d.OwnerUserID != nil && *d.OwnerUserID != owner.ID {
+			if (d.OwnerUserID != nil && *d.OwnerUserID != owner.ID) || (d.OwnerUserID == nil && !owner.IsAdmin()) {
 				return bad("domain_not_owned", "该自定义域名属于其他用户")
 			}
 			if d.Status == store.DomainPending || d.Status == store.DomainDisabled {

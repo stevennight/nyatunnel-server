@@ -1,5 +1,5 @@
 import { vi } from 'vitest'
-import type { AdminUser, Bootstrap, Device, Domain, Me, Tunnel, User } from '../types'
+import type { AdminUser, Bootstrap, Channel, Dashboard, Device, Domain, Me, Quota, Tunnel, TunnelRequest, User } from '../types'
 
 export type Recorded = { method: string; path: string; query: URLSearchParams; headers: Record<string, string>; body: unknown }
 type Reply = { status: number; body?: unknown } | object
@@ -51,7 +51,18 @@ export const adminUser = (u: Partial<User> = {}): User => ({
 export const normalUser = (u: Partial<User> = {}): User =>
   adminUser({ id: 'usr_alice', username: 'alice', role: 'user', totpEnabled: false, recoveryCodesLeft: 0, ...u })
 
-export const listed = (u: User, counts: Partial<AdminUser> = {}): AdminUser => ({ deviceCount: 0, tunnelCount: 0, ...u, ...counts })
+export const quota = (q: Partial<Quota> = {}): Quota => ({
+  enabled: false,
+  maxTunnels: 0,
+  types: [],
+  maxBandwidthKbps: 0,
+  maxDays: 0,
+  interstitial: false,
+  monthlyTrafficMb: 0,
+  ...q,
+})
+
+export const listed = (u: User, counts: Partial<AdminUser> = {}): AdminUser => ({ deviceCount: 0, tunnelCount: 0, quota: quota(), monthBytes: 0, ...u, ...counts })
 
 export const boot = (b: Partial<Bootstrap> = {}): Bootstrap => ({
   version: 'v0.1.0',
@@ -109,15 +120,78 @@ export const tunnel = (t: Partial<Tunnel> = {}): Tunnel => ({
   createdAt: NOW - 86_400_000,
   updatedAt: NOW - 86_400_000,
   state: 'running',
+  hasPassword: false,
+  monthBytes: 0,
+  activeConns: 0,
+  accessPolicy: 'public',
+  basicUsername: '',
+  ipAllowlist: '',
+  interstitial: false,
+  hostRewrite: '',
+  bandwidthKbps: 0,
+  maxConns: 0,
+  monthlyQuotaMb: 0,
+  quotaAction: 'pause',
   ...t,
 })
 
 export const domain = (d: Partial<Domain> = {}): Domain => ({
   id: 'dom_1',
   name: 'dev.example.com',
+  kind: 'root',
   allowUsers: true,
+  ownerUserId: null,
+  ownerName: '',
+  status: 'active',
+  checkedAt: null,
+  checkError: '',
   tunnelCount: 1,
   createdAt: NOW - 86_400_000,
+  ...d,
+})
+
+export const request = (r: Partial<TunnelRequest> = {}): TunnelRequest => ({
+  id: 'req_1',
+  userId: 'usr_alice',
+  username: 'alice',
+  deviceId: null,
+  deviceName: '',
+  payload: { type: 'https', subdomain: 'alice-demo', domainId: 'dom_1', localIp: '127.0.0.1', localPort: 5173, durationHours: 24 },
+  reason: '给客户演示新版页面',
+  status: 'pending',
+  reviewNote: '',
+  reviewedAt: null,
+  tunnelId: null,
+  createdAt: NOW - 600_000,
+  ...r,
+})
+
+export const channel = (c: Partial<Channel> = {}): Channel => ({
+  id: 'ch_1',
+  kind: 'webhook',
+  name: 'ops',
+  events: ['request.created', 'auth.bruteforce'],
+  enabled: true,
+  target: 'https://hooks.example.com',
+  lastError: '',
+  lastSent: null,
+  createdAt: NOW - 86_400_000,
+  ...c,
+})
+
+export const dashboard = (d: Partial<Dashboard> = {}): Dashboard => ({
+  users: 2,
+  devices: 1,
+  devicesOnline: 1,
+  tunnels: 1,
+  tunnelsRunning: 1,
+  tunnelsByType: { https: 1 },
+  openPorts: 0,
+  denied24h: 0,
+  recentDenied: [],
+  traffic24h: 0,
+  trafficMonth: 0,
+  trafficSeries: [],
   ...d,
 })
 
@@ -128,21 +202,16 @@ export const adminRoutes = () => ({
   'GET /users': { users: [listed(adminUser()), listed(normalUser())] },
   'GET /devices': { devices: [device()] },
   'GET /tunnels': { tunnels: [tunnel()] },
-  'GET /domains': { domains: [domain(), domain({ id: 'dom_2', name: 't.example.com', allowUsers: false })] },
+  'GET /domains': { domains: [domain(), domain({ id: 'dom_2', name: 't.example.com', allowUsers: false })], publicIps: ['203.0.113.10'] },
   'GET /port-pools': { portPools: [] },
   'GET /audit': { events: [] },
-  'GET /settings': { serverName: 'Nya 的家庭网络', forceTotp: false },
-  'GET /dashboard': {
-    users: 2,
-    devices: 1,
-    devicesOnline: 1,
-    tunnels: 1,
-    tunnelsRunning: 1,
-    tunnelsByType: { https: 1 },
-    openPorts: 0,
-    denied24h: 0,
-    recentDenied: [],
-  },
+  'GET /settings': { serverName: 'Nya 的家庭网络', forceTotp: false, minClientVersion: '', surgeMbPerHour: 0 },
+  'GET /dashboard': dashboard(),
+  'GET /requests': { requests: [], pending: 0 },
+  'GET /enrollments': { enrollments: [] },
+  'GET /channels': { channels: [], events: ['request.created', 'device.enrolled', 'quota.exceeded', 'traffic.surge', 'auth.bruteforce', 'domain.changed'] },
+  'GET /me/sessions': { sessions: [] },
+  'GET /traffic': { series: [] },
 })
 
 /** A signed-in normal user. */
@@ -153,4 +222,5 @@ export const userRoutes = () => ({
   'GET /users': { status: 403, body: { error: 'forbidden', message: '' } },
   'GET /tunnels': { tunnels: [tunnel({ id: 'tun_a', userId: 'usr_alice', username: 'alice', name: 'alice-blog', deviceId: null, deviceName: '', state: 'unassigned' })] },
   'GET /devices': { devices: [] },
+  'GET /domains': { domains: [domain()], publicIps: ['203.0.113.10'] },
 })

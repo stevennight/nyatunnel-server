@@ -1,7 +1,9 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { describeError, getDashboard } from '../api'
+import { describeError, getDashboard, listRequests } from '../api'
+import { TrafficChart } from '../components/traffic-chart'
 import { Empty, Loading, Notice, PageHead } from '../components/ui'
+import { bytes } from '../format'
 import { POLL_MS } from '../query'
 import { useSession } from '../session'
 import { AuditRow } from './audit'
@@ -9,6 +11,8 @@ import { AuditRow } from './audit'
 export function DashboardPage() {
   const { bootstrap } = useSession()
   const dash = useQuery({ queryKey: ['dashboard'], queryFn: getDashboard, refetchInterval: POLL_MS })
+  const requests = useQuery({ queryKey: ['requests'], queryFn: listRequests, refetchInterval: POLL_MS })
+  const pending = requests.data?.pending ?? 0
   const d = dash.data
 
   return (
@@ -46,6 +50,32 @@ export function DashboardPage() {
               <div className={`v${d.denied24h > 0 ? ' bad-text' : ''}`}>{d.denied24h}</div>
               <div className="s">登录失败、设备认证失败、无效注册码等</div>
             </div>
+          </div>
+
+          <div className="cards three">
+            <div className="card">
+              <div className="k">24 小时流量</div>
+              <div className="v">{bytes(d.traffic24h ?? 0)}</div>
+              <div className="s">所有隧道入站 + 出站</div>
+            </div>
+            <div className="card">
+              <div className="k">本月流量</div>
+              <div className="v">{bytes(d.trafficMonth ?? 0)}</div>
+              <div className="s">按自然月（UTC）统计</div>
+            </div>
+            <Link to="/requests" className="card link-card" aria-label={`待审批申请 ${pending}`}>
+              <div className="k">待审批申请</div>
+              <div className={`v${pending > 0 ? ' warn-text' : ''}`}>{pending}</div>
+              <div className="s">{pending > 0 ? '点击前往审批 →' : '没有等待处理的申请'}</div>
+            </Link>
+          </div>
+
+          <div className="card">
+            <div className="ttl tight">
+              <h3>最近 24 小时流量</h3>
+              <span className="hint">合计 {bytes(d.traffic24h ?? 0)}</span>
+            </div>
+            <TrafficChart series={d.trafficSeries ?? []} hours={24} label="最近 24 小时流量" />
           </div>
 
           <div className="ttl">

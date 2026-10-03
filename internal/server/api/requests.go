@@ -53,7 +53,12 @@ func (s *server) handleListRequests(w http.ResponseWriter, r *http.Request, p *p
 		}
 		out = append(out, v)
 	}
-	pending, _ := s.Store.PendingRequestCount(r.Context())
+	var pending int
+	if p.admin() {
+		pending, _ = s.Store.PendingRequestCount(r.Context())
+	} else {
+		pending, _ = s.Store.PendingRequestCountOf(r.Context(), p.user.ID)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"requests": out, "pending": pending})
 }
 
@@ -207,6 +212,15 @@ func (s *server) handleRejectRequest(w http.ResponseWriter, r *http.Request, p *
 		return
 	}
 	id := r.PathValue("id")
+	q, err := s.Store.TunnelRequestByID(r.Context(), id)
+	if err != nil {
+		s.fail(w, "reject request", err)
+		return
+	}
+	if q.Status != "pending" {
+		writeError(w, http.StatusConflict, "not_pending", "该申请已处理")
+		return
+	}
 	if err := s.Store.ResolveTunnelRequest(r.Context(), id, "rejected", strings.TrimSpace(body.Note), &p.user.ID, nil, s.now().UnixMilli()); err != nil {
 		s.fail(w, "reject request", err)
 		return
@@ -219,6 +233,10 @@ func (s *server) handleCancelRequest(w http.ResponseWriter, r *http.Request, p *
 	q, err := s.Store.TunnelRequestByID(r.Context(), r.PathValue("id"))
 	if err != nil || q.UserID != p.user.ID {
 		writeError(w, http.StatusNotFound, "not_found", "")
+		return
+	}
+	if q.Status != "pending" {
+		writeError(w, http.StatusConflict, "not_pending", "该申请已处理")
 		return
 	}
 	if err := s.Store.ResolveTunnelRequest(r.Context(), q.ID, "cancelled", "", nil, nil, s.now().UnixMilli()); err != nil {

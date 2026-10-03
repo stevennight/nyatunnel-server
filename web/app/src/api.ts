@@ -3,20 +3,29 @@ import type {
   AdminUser,
   AuditEvent,
   Bootstrap,
+  Channel,
+  ChannelInput,
   Dashboard,
   Device,
   Domain,
+  DomainList,
   Enrollment,
   EnrollmentInput,
+  LoginSession,
   Me,
   Ok,
+  PendingEnrollment,
   PortPool,
   PortProto,
+  Quota,
+  RequestInput,
   Role,
   Settings,
   TotpSetup,
+  TrafficPoint,
   Tunnel,
   TunnelInput,
+  TunnelRequest,
   User,
 } from './types'
 
@@ -64,6 +73,17 @@ const fallbackText: Record<string, string> = {
   internal_error: '服务端出错了，请稍后再试',
   database_unavailable: '数据库不可用',
   body_too_large: '请求内容过大',
+  self_service_disabled: '你的账号未开通自助创建，请提交隧道申请',
+  type_not_allowed: '你的额度不允许自助创建该类型的隧道，请提交申请',
+  tunnel_limit: '隧道数量已达到额度上限，请提交申请',
+  not_pending: '该申请已处理',
+  current_session: '请使用“退出登录”结束当前会话',
+  totp_disabled: '请先开启两步验证',
+  delivery_failed: '发送失败',
+  invalid_version: '最低客户端版本应形如 0.2.0',
+  domain_not_approved: '该自定义域名尚未批准或已停用',
+  domain_not_owned: '该自定义域名属于其他用户',
+  invalid_gate_request: '登录跳转参数无效',
 }
 
 /** Codes whose server message is English or technical: always show the Chinese text. */
@@ -151,6 +171,11 @@ export const setupTotp = () => api<TotpSetup>('/me/totp/setup', { method: 'POST'
 export const enableTotp = (body: { secret: string; code: string }) =>
   api<{ recoveryCodes: string[] }>('/me/totp/enable', { method: 'POST', body })
 export const disableTotp = (password: string) => api<Ok>('/me/totp/disable', { method: 'POST', body: { password } })
+/** Replaces every recovery code; the new ones are returned once. */
+export const regenerateRecoveryCodes = (password: string) =>
+  api<{ recoveryCodes: string[] }>('/me/totp/recovery-codes', { method: 'POST', body: { password } })
+export const listSessions = () => api<{ sessions: LoginSession[] }>('/me/sessions')
+export const revokeSession = (id: string) => api<Ok>(`/me/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' })
 
 // --- devices & enrollment ---
 
@@ -158,6 +183,8 @@ export const listDevices = (userId?: string) => api<{ devices: Device[] }>(`/dev
 export const renameDevice = (id: string, name: string) => api<Ok>(`/devices/${encodeURIComponent(id)}`, { method: 'PATCH', body: { name } })
 export const revokeDevice = (id: string) => api<Ok>(`/devices/${encodeURIComponent(id)}/revoke`, { method: 'POST' })
 export const createEnrollment = (body: EnrollmentInput) => api<Enrollment>('/enrollments', { method: 'POST', body })
+export const listEnrollments = () => api<{ enrollments: PendingEnrollment[] }>('/enrollments')
+export const cancelEnrollment = (id: string) => api<Ok>(`/enrollments/${encodeURIComponent(id)}`, { method: 'DELETE' })
 
 // --- tunnels ---
 
@@ -166,14 +193,31 @@ export const createTunnel = (body: TunnelInput) => api<{ tunnel: Tunnel }>('/tun
 export const updateTunnel = (id: string, body: TunnelInput) =>
   api<{ tunnel: Tunnel }>(`/tunnels/${encodeURIComponent(id)}`, { method: 'PUT', body })
 export const deleteTunnel = (id: string) => api<Ok>(`/tunnels/${encodeURIComponent(id)}`, { method: 'DELETE' })
+/** Hourly traffic of one tunnel (or, without tunnelId, one user / everything). */
+export const getTraffic = (params: { tunnelId?: string; userId?: string; hours: number }) =>
+  api<{ series: TrafficPoint[] }>(`/traffic${qs(params)}`)
+
+// --- tunnel requests ---
+
+export const listRequests = () => api<{ requests: TunnelRequest[]; pending: number }>('/requests')
+export const createRequest = (body: RequestInput) => api<{ id: string }>('/requests', { method: 'POST', body })
+export const cancelRequest = (id: string) => api<Ok>(`/requests/${encodeURIComponent(id)}/cancel`, { method: 'POST' })
+export const approveRequest = (id: string, body: { tunnel: TunnelInput; note: string }) =>
+  api<{ tunnelId: string }>(`/requests/${encodeURIComponent(id)}/approve`, { method: 'POST', body })
+export const rejectRequest = (id: string, note: string) => api<Ok>(`/requests/${encodeURIComponent(id)}/reject`, { method: 'POST', body: { note } })
 
 // --- domains & port pools ---
 
-export const listDomains = () => api<{ domains: Domain[] }>('/domains')
-export const createDomain = (body: { name: string; allowUsers: boolean }) => api<{ domain: Domain }>('/domains', { method: 'POST', body })
-export const updateDomain = (id: string, allowUsers: boolean) =>
-  api<Ok>(`/domains/${encodeURIComponent(id)}`, { method: 'PATCH', body: { allowUsers } })
+export const listDomains = () => api<DomainList>('/domains')
+export const createDomain = (body: { name: string; allowUsers?: boolean; kind?: 'root' | 'custom'; ownerUserId?: string }) =>
+  api<{ domain: Domain }>('/domains', { method: 'POST', body })
+/** Root domains: allowUsers. Custom domains: approve / disable / enable. */
+export const updateDomain = (id: string, body: { allowUsers?: boolean; action?: 'approve' | 'disable' | 'enable' }) =>
+  api<Ok>(`/domains/${encodeURIComponent(id)}`, { method: 'PATCH', body })
 export const deleteDomain = (id: string) => api<Ok>(`/domains/${encodeURIComponent(id)}`, { method: 'DELETE' })
+/** A user asks for their own custom domain. */
+export const requestCustomDomain = (name: string) => api<{ domain: Domain }>('/domains/custom', { method: 'POST', body: { name } })
+export const checkDomain = (id: string) => api<{ domain: Domain }>(`/domains/${encodeURIComponent(id)}/check`, { method: 'POST' })
 
 export const listPortPools = () => api<{ portPools: PortPool[] }>('/port-pools')
 export const createPortPool = (body: { proto: PortProto; start: number; end: number }) =>
@@ -187,6 +231,15 @@ export const createUser = (body: { username: string; password: string; role: Rol
 export const updateUser = (id: string, body: { role?: Role; password?: string; disabled?: boolean }) =>
   api<{ user: User }>(`/users/${encodeURIComponent(id)}`, { method: 'PATCH', body })
 export const resetUserTotp = (id: string) => api<Ok>(`/users/${encodeURIComponent(id)}/totp/reset`, { method: 'POST' })
+export const setUserQuota = (id: string, body: Quota) => api<Ok>(`/users/${encodeURIComponent(id)}/quota`, { method: 'PUT', body })
+
+// --- notification channels ---
+
+export const listChannels = () => api<{ channels: Channel[]; events: string[] }>('/channels')
+export const createChannel = (body: ChannelInput) => api<{ channel: Channel }>('/channels', { method: 'POST', body })
+export const updateChannel = (id: string, body: ChannelInput) => api<{ channel: Channel }>(`/channels/${encodeURIComponent(id)}`, { method: 'PUT', body })
+export const deleteChannel = (id: string) => api<Ok>(`/channels/${encodeURIComponent(id)}`, { method: 'DELETE' })
+export const testChannel = (id: string) => api<Ok>(`/channels/${encodeURIComponent(id)}/test`, { method: 'POST' })
 
 // --- system ---
 

@@ -13,10 +13,29 @@ export type User = {
   recoveryCodesLeft?: number
 }
 
+/** What a normal user may do without asking an administrator (store.Quota). */
+export type Quota = {
+  /** Self-service tunnel creation within the limits below. */
+  enabled: boolean
+  /** Counts all of the user's tunnels (0 = no limit). */
+  maxTunnels: number
+  types: TunnelType[]
+  /** Cap for self-service tunnels (0 = no cap). */
+  maxBandwidthKbps: number
+  /** Longest lifetime of a self-service tunnel (0 = unlimited). */
+  maxDays: number
+  /** Forces the first-visit warning page on self-service HTTPS tunnels. */
+  interstitial: boolean
+  /** All of the user's tunnels together (0 = unlimited); applies even when self-service is off. */
+  monthlyTrafficMb: number
+}
+
 /** A row of GET /users. */
 export type AdminUser = User & {
   deviceCount: number
   tunnelCount: number
+  quota: Quota
+  monthBytes: number
 }
 
 export type Bootstrap = {
@@ -70,7 +89,30 @@ export type EnrollmentInput = {
 
 export type TunnelType = 'https' | 'tcp' | 'udp'
 
-export type TunnelState = 'running' | 'offline' | 'paused' | 'disabled' | 'expired' | 'unassigned' | 'error'
+export type TunnelState = 'running' | 'offline' | 'paused' | 'disabled' | 'expired' | 'over_quota' | 'unassigned' | 'error'
+
+/** Who may open an HTTPS tunnel; anything but public is HTTPS-only. */
+export type AccessPolicy = 'public' | 'password' | 'basic' | 'login'
+
+/** What happens when a tunnel's monthly quota is used up. */
+export type QuotaAction = 'pause' | 'alert'
+
+/** Access control and limits, shared by the tunnel view and the input. */
+type TunnelPolicy = {
+  accessPolicy: AccessPolicy
+  basicUsername: string
+  /** Comma separated IP / CIDR; empty = everyone. */
+  ipAllowlist: string
+  /** First-visit warning page (HTTPS only). */
+  interstitial: boolean
+  /** Host header sent to the local service (HTTPS only); empty = unchanged. */
+  hostRewrite: string
+  /** 0 = unlimited. */
+  bandwidthKbps: number
+  maxConns: number
+  monthlyQuotaMb: number
+  quotaAction: QuotaAction
+}
 
 export type Tunnel = {
   id: string
@@ -98,7 +140,12 @@ export type Tunnel = {
   updatedAt: number
   state: TunnelState
   stateError?: string
-}
+  /** The access password itself is never returned. */
+  hasPassword: boolean
+  /** Bytes in + out this calendar month (UTC). */
+  monthBytes: number
+  activeConns: number
+} & TunnelPolicy
 
 /** Body of POST /tunnels and PUT /tunnels/{id}: the full editable state. */
 export type TunnelInput = {
@@ -118,15 +165,35 @@ export type TunnelInput = {
   enabled: boolean
   note: string
   expiresAt: number | null
-}
+  /** Write-only: omitted or empty keeps the stored password. */
+  accessPassword?: string
+} & TunnelPolicy
+
+export type DomainKind = 'root' | 'custom'
+
+/** Custom domains only: pending (asked for) → dns (approved, waiting for DNS) → active; or disabled. */
+export type DomainStatus = 'pending' | 'dns' | 'active' | 'disabled'
 
 export type Domain = {
   id: string
   name: string
+  kind: DomainKind
+  /** Root domains: normal users may use it (with their "<username>-" prefix). */
   allowUsers: boolean
-  /** Only counted for administrators. */
+  ownerUserId: string | null
+  ownerName: string
+  status: DomainStatus
+  checkedAt: number | null
+  checkError: string
+  /** Admins: all tunnels; users: their own. */
   tunnelCount: number
   createdAt: number
+}
+
+export type DomainList = {
+  domains: Domain[]
+  /** Where custom domains must point (A / AAAA). */
+  publicIps: string[]
 }
 
 export type PortProto = 'tcp' | 'udp'
@@ -154,6 +221,18 @@ export type AuditEvent = {
 export type Settings = {
   serverName: string
   forceTotp: boolean
+  /** Oldest client version allowed to connect, e.g. "0.2.0"; empty = any. */
+  minClientVersion: string
+  /** Alert when a tunnel moves more than this per hour; 0 = off. */
+  surgeMbPerHour: number
+}
+
+/** One hour of traffic; `hour` is the bucket start (Unix ms, UTC hour). Hours without traffic are missing. */
+export type TrafficPoint = {
+  hour: number
+  bytesIn: number
+  bytesOut: number
+  conns: number
 }
 
 export type Dashboard = {
@@ -166,6 +245,103 @@ export type Dashboard = {
   openPorts: number
   denied24h: number
   recentDenied: AuditEvent[]
+  traffic24h: number
+  trafficMonth: number
+  /** Last 24 hours, hourly, all tunnels. */
+  trafficSeries: TrafficPoint[]
+}
+
+/** What a tunnel request asks for. */
+export type RequestPayload = {
+  type: TunnelType
+  name?: string
+  domainId?: string
+  subdomain?: string
+  customDomain?: string
+  remotePort?: number
+  localIp: string
+  localPort: number
+  /** 0 or missing = permanent. */
+  durationHours?: number
+}
+
+export type RequestStatus = 'pending' | 'approved' | 'rejected' | 'cancelled'
+
+export type TunnelRequest = {
+  id: string
+  userId: string
+  username: string
+  deviceId: string | null
+  deviceName: string
+  payload: RequestPayload
+  reason: string
+  status: RequestStatus
+  reviewNote: string
+  reviewedAt: number | null
+  tunnelId: string | null
+  createdAt: number
+}
+
+/** Body of POST /requests. */
+export type RequestInput = RequestPayload & {
+  reason: string
+  deviceId?: string
+}
+
+export type ChannelKind = 'webhook' | 'telegram'
+
+export type ChannelEvent = 'request.created' | 'device.enrolled' | 'quota.exceeded' | 'traffic.surge' | 'auth.bruteforce' | 'domain.changed' | 'abuse.report'
+
+export type Channel = {
+  id: string
+  kind: ChannelKind
+  name: string
+  events: string[]
+  enabled: boolean
+  /** A safe summary: webhook origin or Telegram chat id. */
+  target: string
+  lastError: string
+  lastSent: number | null
+  createdAt: number
+}
+
+/** Secrets of a channel: write-only. */
+export type ChannelConfig = {
+  url?: string
+  secret?: string
+  botToken?: string
+  chatId?: string
+  apiBase?: string
+}
+
+/** Body of POST /channels and PUT /channels/{id}. Omit `config` on edit to keep the stored secrets. */
+export type ChannelInput = {
+  kind: ChannelKind
+  name: string
+  events: string[]
+  enabled: boolean
+  config?: ChannelConfig
+}
+
+/** A console login session of the signed-in user. */
+export type LoginSession = {
+  id: string
+  current: boolean
+  createdAt: number
+  lastUsedAt: number
+  ip: string
+  userAgent: string
+}
+
+/** An unused enrollment code (the code itself is not stored). */
+export type PendingEnrollment = {
+  id: string
+  userId: string
+  username: string
+  deviceNameHint: string
+  tunnelIds: string[]
+  expiresAt: number
+  createdAt: number
 }
 
 export type Ok = { ok: true }

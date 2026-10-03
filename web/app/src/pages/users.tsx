@@ -2,11 +2,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { Plus } from 'lucide-react'
-import { createUser, describeError, listUsers, resetUserTotp, updateUser } from '../api'
+import { createUser, describeError, listUsers, resetUserTotp, setUserQuota, updateUser } from '../api'
 import { ConfirmDialog, Dot, Empty, Loading, Modal, Notice, PageHead, Tag } from '../components/ui'
-import { date } from '../format'
+import { bytes, date, gbToMb, kbpsToMbps, mbToGb, mbpsToKbps, parseAmount, quotaMb } from '../format'
+import { tunnelTypes } from '../labels'
 import { useSession } from '../session'
-import type { AdminUser, Role } from '../types'
+import type { AdminUser, Quota, Role, TunnelType } from '../types'
 import { MIN_PASSWORD, USERNAME_RE } from './auth'
 
 export function UsersPage() {
@@ -15,6 +16,7 @@ export function UsersPage() {
   const [creating, setCreating] = useState(false)
   const [editing, setEditing] = useState<AdminUser | null>(null)
   const [resetting, setResetting] = useState<AdminUser | null>(null)
+  const [quota, setQuota] = useState<AdminUser | null>(null)
 
   return (
     <>
@@ -47,6 +49,8 @@ export function UsersPage() {
                 <th>两步验证</th>
                 <th>设备</th>
                 <th>隧道</th>
+                <th>自助额度</th>
+                <th>本月流量</th>
                 <th>状态</th>
                 <th>创建于</th>
                 <th />
@@ -70,7 +74,14 @@ export function UsersPage() {
                     )}
                   </td>
                   <td>{u.deviceCount}</td>
-                  <td>{u.tunnelCount}</td>
+                  <td>
+                    {u.tunnelCount}
+                    {u.role !== 'admin' && u.quota?.enabled && u.quota.maxTunnels > 0 && <span className="hint"> / {u.quota.maxTunnels}</span>}
+                  </td>
+                  <td>{u.role === 'admin' ? <span className="hint">—</span> : <QuotaSummary q={u.quota} />}</td>
+                  <td>
+                    <MonthTraffic u={u} />
+                  </td>
                   <td>
                     {u.disabled ? (
                       <Tag tone="bad">已禁用</Tag>
@@ -86,6 +97,9 @@ export function UsersPage() {
                     <div className="inline">
                       <button type="button" className="btn sm" onClick={() => setEditing(u)}>
                         编辑
+                      </button>
+                      <button type="button" className="btn sm" onClick={() => setQuota(u)} aria-label={`${u.username} 的额度`}>
+                        额度
                       </button>
                       {u.totpEnabled && u.id !== me.id && (
                         <button type="button" className="btn sm" onClick={() => setResetting(u)}>
@@ -104,7 +118,154 @@ export function UsersPage() {
       {creating && <CreateUserDialog onClose={() => setCreating(false)} />}
       {editing && <EditUserDialog user={editing} self={editing.id === me.id} onClose={() => setEditing(null)} />}
       {resetting && <ResetTotpDialog user={resetting} onClose={() => setResetting(null)} />}
+      {quota && <QuotaDialog user={quota} onClose={() => setQuota(null)} />}
     </>
+  )
+}
+
+const emptyQuota: Quota = { enabled: false, maxTunnels: 0, types: [], maxBandwidthKbps: 0, maxDays: 0, interstitial: false, monthlyTrafficMb: 0 }
+
+/** "HTTPS ×3 · 10 Mbps · 7 天" or "关闭（全部审批）". */
+export function QuotaSummary({ q }: { q: Quota | undefined }) {
+  if (!q || !q.enabled) return <Tag>关闭（全部审批）</Tag>
+  const parts = [
+    `${q.types.length ? q.types.map((t) => tunnelTypes[t]?.label ?? t).join('/') : '无类型'}${q.maxTunnels > 0 ? ` ×${q.maxTunnels}` : ''}`,
+    q.maxBandwidthKbps > 0 ? `${kbpsToMbps(q.maxBandwidthKbps)} Mbps` : '',
+    q.maxDays > 0 ? `${q.maxDays} 天` : '',
+    q.interstitial ? '提示页' : '',
+  ].filter(Boolean)
+  return <span>{parts.join(' · ')}</span>
+}
+
+function MonthTraffic({ u }: { u: AdminUser }) {
+  const limit = u.quota?.monthlyTrafficMb ?? 0
+  const over = limit > 0 && u.monthBytes >= limit * 1024 * 1024
+  return (
+    <span className={over ? 'bad-text' : undefined}>
+      {u.monthBytes > 0 ? bytes(u.monthBytes) : <span className="hint">—</span>}
+      {limit > 0 && <span className="hint"> / {quotaMb(limit)}</span>}
+    </span>
+  )
+}
+
+const ALL_TYPES: TunnelType[] = ['https', 'tcp', 'udp']
+
+/** The self-service quota of one user (PUT /users/{id}/quota). */
+export function QuotaDialog({ user, onClose }: { user: AdminUser; onClose: () => void }) {
+  const client = useQueryClient()
+  const q: Quota = { ...emptyQuota, ...user.quota, types: user.quota?.types ?? [] }
+  const [enabled, setEnabled] = useState(q.enabled)
+  const [maxTunnels, setMaxTunnels] = useState(q.maxTunnels > 0 ? String(q.maxTunnels) : '')
+  const [types, setTypes] = useState<TunnelType[]>(q.types)
+  const [bandwidth, setBandwidth] = useState(kbpsToMbps(q.maxBandwidthKbps))
+  const [maxDays, setMaxDays] = useState(q.maxDays > 0 ? String(q.maxDays) : '')
+  const [interstitial, setInterstitial] = useState(q.interstitial)
+  const [traffic, setTraffic] = useState(mbToGb(q.monthlyTrafficMb))
+  const [problem, setProblem] = useState<string | null>(null)
+
+  const mutation = useMutation({
+    mutationFn: (body: Quota) => setUserQuota(user.id, body),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ['users'] })
+      void client.invalidateQueries({ queryKey: ['tunnels'] })
+      onClose()
+    },
+    onError: (e) => setProblem(describeError(e)),
+  })
+
+  const submit = (e: FormEvent) => {
+    e.preventDefault()
+    const n = parseAmount(maxTunnels)
+    const bw = parseAmount(bandwidth)
+    const days = parseAmount(maxDays)
+    const gb = parseAmount(traffic)
+    if ([n, bw, days, gb].some(Number.isNaN) || !Number.isInteger(n) || !Number.isInteger(days)) {
+      return setProblem('请填写非负数字（隧道数和天数为整数），留空表示不限')
+    }
+    if (enabled && types.length === 0) return setProblem('开启自助创建时至少允许一种类型')
+    setProblem(null)
+    mutation.mutate({
+      enabled,
+      maxTunnels: n,
+      types: ALL_TYPES.filter((t) => types.includes(t)),
+      maxBandwidthKbps: mbpsToKbps(bw),
+      maxDays: days,
+      interstitial,
+      monthlyTrafficMb: gbToMb(gb),
+    })
+  }
+
+  return (
+    <Modal title={`${user.username} 的自助额度`} onClose={onClose}>
+      <form className="form" onSubmit={submit} aria-label="自助额度">
+        <p className="hint">超出额度的需求可以提交申请，等待管理员审批。账号月流量对该用户的所有隧道生效，即使未开启自助创建。</p>
+        <label className="chk">
+          <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+          允许自助创建隧道
+        </label>
+        <div className="fs">
+          <div className="row">
+            <label htmlFor="q-max">最多隧道数</label>
+            <input id="q-max" className="inp mono narrow" inputMode="numeric" value={maxTunnels} disabled={!enabled} onChange={(e) => setMaxTunnels(e.target.value)} placeholder="不限" />
+          </div>
+          <div className="row">
+            <span className="label">允许的类型</span>
+            <div className="inline wrap">
+              {ALL_TYPES.map((t) => (
+                <label key={t} className="chk inline-chk">
+                  <input
+                    type="checkbox"
+                    checked={types.includes(t)}
+                    disabled={!enabled}
+                    onChange={(e) => setTypes((s) => (e.target.checked ? [...s, t] : s.filter((x) => x !== t)))}
+                  />
+                  {tunnelTypes[t].label}
+                </label>
+              ))}
+            </div>
+          </div>
+          <div className="row">
+            <label htmlFor="q-bw">单隧道带宽</label>
+            <div className="inline">
+              <input id="q-bw" className="inp mono narrow" inputMode="decimal" value={bandwidth} disabled={!enabled} onChange={(e) => setBandwidth(e.target.value)} placeholder="不限" />
+              <span>Mbps</span>
+            </div>
+          </div>
+          <div className="row">
+            <label htmlFor="q-days">最长有效期</label>
+            <div className="inline">
+              <input id="q-days" className="inp mono narrow" inputMode="numeric" value={maxDays} disabled={!enabled} onChange={(e) => setMaxDays(e.target.value)} placeholder="永久" />
+              <span>天</span>
+            </div>
+          </div>
+          <label className="chk">
+            <input type="checkbox" checked={interstitial} disabled={!enabled} onChange={(e) => setInterstitial(e.target.checked)} />
+            自助创建的 HTTPS 隧道强制显示首次访问提示页
+          </label>
+          <div className="row">
+            <span className="label">子域名规则</span>
+            <span className="mono">{user.username}-*.根域名</span>
+          </div>
+        </div>
+        <div className="row">
+          <label htmlFor="q-traffic">账号月流量</label>
+          <div className="inline wrap">
+            <input id="q-traffic" className="inp mono narrow" inputMode="decimal" value={traffic} onChange={(e) => setTraffic(e.target.value)} placeholder="不限" />
+            <span>GB</span>
+            <span className="hint">本月已用 {bytes(user.monthBytes)}</span>
+          </div>
+        </div>
+        {problem && <Notice tone="bad">{problem}</Notice>}
+        <div className="actions">
+          <button type="button" className="btn" onClick={onClose}>
+            取消
+          </button>
+          <button type="submit" className="btn primary" disabled={mutation.isPending}>
+            保存
+          </button>
+        </div>
+      </form>
+    </Modal>
   )
 }
 
@@ -145,7 +306,7 @@ function CreateUserDialog({ onClose }: { onClose: () => void }) {
         <label className="field">
           角色
           <select className="inp" value={role} onChange={(e) => setRole(e.target.value as Role)}>
-            <option value="user">普通用户（只能查看自己的隧道，邀请自己的设备）</option>
+            <option value="user">普通用户（管理自己的设备；按额度自助创建隧道或提交申请）</option>
             <option value="admin">管理员（完全控制）</option>
           </select>
         </label>

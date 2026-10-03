@@ -4,6 +4,7 @@ import type { FormEvent, ReactNode } from 'react'
 import { describeError, isApiError, login, setup } from '../api'
 import type { LoginInput } from '../api'
 import { Notice } from '../components/ui'
+import { isServerRoute } from '../next'
 
 export const MIN_PASSWORD = 10
 export const USERNAME_RE = /^[a-z0-9][a-z0-9_.-]{1,31}$/
@@ -87,7 +88,11 @@ export function SetupPage() {
   )
 }
 
-export function LoginPage({ serverName }: { serverName: string }) {
+/**
+ * After a successful login bootstrap is reloaded; on /login the frame then continues to the
+ * (already validated) `next`.
+ */
+export function LoginPage({ serverName, next = null }: { serverName: string; next?: string | null }) {
   const client = useQueryClient()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
@@ -126,7 +131,11 @@ export function LoginPage({ serverName }: { serverName: string }) {
   }
 
   return (
-    <AuthCard title="登录" hint="登录 NyaTunnel 管理后台。" serverName={serverName}>
+    <AuthCard
+      title="登录"
+      hint={next && isServerRoute(next) ? '你要访问的网站需要登录。登录后会自动返回该网站。' : '登录 NyaTunnel 管理后台。'}
+      serverName={serverName}
+    >
       <form onSubmit={submit} className="stack">
         <label className="field">
           用户名

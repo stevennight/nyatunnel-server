@@ -1,11 +1,11 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { Download } from 'lucide-react'
-import { changePassword, describeError, disableTotp, enableTotp, setupTotp } from '../api'
+import { changePassword, describeError, disableTotp, enableTotp, listSessions, regenerateRecoveryCodes, revokeSession, setupTotp } from '../api'
 import { QrCode } from '../components/qr'
-import { CopyButton, Notice, PageHead, Tag } from '../components/ui'
-import { downloadText, groupSecret } from '../format'
+import { CopyButton, Empty, Loading, Notice, PageHead, Tag } from '../components/ui'
+import { ago, dateTime, downloadText, groupSecret } from '../format'
 import { useSession } from '../session'
 import type { TotpSetup } from '../types'
 import { MIN_PASSWORD } from './auth'
@@ -18,7 +18,94 @@ export function SecurityPage() {
         <PasswordCard />
         <TotpCard />
       </div>
+      <SessionsCard />
     </>
+  )
+}
+
+/** "Chrome · Windows" from a User-Agent string; the raw value is kept in the tooltip. */
+export function describeUserAgent(ua: string): string {
+  if (!ua) return '未知设备'
+  const browser = /Edg\//.test(ua)
+    ? 'Edge'
+    : /OPR\//.test(ua)
+      ? 'Opera'
+      : /Firefox\//.test(ua)
+        ? 'Firefox'
+        : /Chrome\//.test(ua)
+          ? 'Chrome'
+          : /Safari\//.test(ua)
+            ? 'Safari'
+            : /curl\//i.test(ua)
+              ? 'curl'
+              : ''
+  const os = /Windows/.test(ua)
+    ? 'Windows'
+    : /iPhone|iPad/.test(ua)
+      ? 'iOS'
+      : /Android/.test(ua)
+        ? 'Android'
+        : /Mac OS X|Macintosh/.test(ua)
+          ? 'macOS'
+          : /Linux/.test(ua)
+            ? 'Linux'
+            : ''
+  return [browser, os].filter(Boolean).join(' · ') || ua.slice(0, 40)
+}
+
+function SessionsCard() {
+  const client = useQueryClient()
+  const sessions = useQuery({ queryKey: ['sessions'], queryFn: listSessions })
+  const revoke = useMutation({
+    mutationFn: (id: string) => revokeSession(id),
+    onSettled: () => client.invalidateQueries({ queryKey: ['sessions'] }),
+  })
+  const rows = [...(sessions.data?.sessions ?? [])].sort((a, b) => Number(b.current) - Number(a.current) || b.lastUsedAt - a.lastUsedAt)
+  return (
+    <section className="fs mt" aria-label="登录会话">
+      <h4>登录会话</h4>
+      <p className="hint">在其他地方登录的会话会显示在这里。看到不认识的设备时请退出它，并尽快修改密码。</p>
+      {sessions.isError && <Notice tone="bad">{describeError(sessions.error)}</Notice>}
+      {revoke.isError && <Notice tone="bad">{describeError(revoke.error)}</Notice>}
+      {sessions.isPending ? (
+        <Loading />
+      ) : rows.length === 0 ? (
+        <Empty>没有登录会话。</Empty>
+      ) : (
+        <div className="tbl">
+          <table>
+            <thead>
+              <tr>
+                <th>设备</th>
+                <th>IP</th>
+                <th>最近活动</th>
+                <th>登录于</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((x) => (
+                <tr key={x.id}>
+                  <td title={x.userAgent}>
+                    {describeUserAgent(x.userAgent)} {x.current && <Tag tone="ok">当前</Tag>}
+                  </td>
+                  <td className="mono">{x.ip || '—'}</td>
+                  <td title={dateTime(x.lastUsedAt)}>{x.current ? '现在' : ago(x.lastUsedAt)}</td>
+                  <td>{dateTime(x.createdAt)}</td>
+                  <td>
+                    {!x.current && (
+                      <button type="button" className="btn sm danger" disabled={revoke.isPending} onClick={() => revoke.mutate(x.id)}>
+                        退出
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
   )
 }
 
@@ -84,6 +171,7 @@ function TotpCard() {
   const [code, setCode] = useState('')
   const [password, setPassword] = useState('')
   const [codes, setCodes] = useState<string[] | null>(null)
+  const [regenerated, setRegenerated] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)
   const [done, setDone] = useState<string | null>(null)
 
@@ -111,6 +199,17 @@ function TotpCard() {
     },
     onError: (e) => setProblem(describeError(e)),
   })
+  const regenerate = useMutation({
+    mutationFn: () => regenerateRecoveryCodes(password),
+    onSuccess: (r) => {
+      setPassword('')
+      setProblem(null)
+      setDone(null)
+      setRegenerated(true)
+      setCodes(r.recoveryCodes)
+    },
+    onError: (e) => setProblem(describeError(e)),
+  })
   const disable = useMutation({
     mutationFn: () => disableTotp(password),
     onSuccess: () => {
@@ -129,7 +228,7 @@ function TotpCard() {
         <h4>
           两步验证（TOTP） <Tag tone="ok">已开启</Tag>
         </h4>
-        <Notice tone="warn">下面的恢复码只显示这一次。手机丢失时，每个恢复码可代替验证码登录一次。请离线保存。</Notice>
+        <Notice tone="warn">{regenerated ? '旧的恢复码已全部作废。' : ''}下面的恢复码只显示这一次。手机丢失时，每个恢复码可代替验证码登录一次。请离线保存。</Notice>
         <ol className="codes mono" aria-label="恢复码">
           {codes.map((c) => (
             <li key={c}>{c}</li>
@@ -149,7 +248,8 @@ function TotpCard() {
             className="btn primary"
             onClick={() => {
               setCodes(null)
-              setDone('两步验证已开启，下次登录需要输入验证码。')
+              setDone(regenerated ? '已生成新的恢复码。' : '两步验证已开启，下次登录需要输入验证码。')
+              setRegenerated(false)
               void refreshMe()
             }}
           >
@@ -170,30 +270,42 @@ function TotpCard() {
         <>
           <p className="hint">
             登录时需要输入身份验证器中的 6 位验证码。剩余恢复码：<b>{user.recoveryCodesLeft ?? '—'}</b> 个
-            {user.recoveryCodesLeft === 0 && '（已用完，建议关闭后重新开启以生成新的恢复码）'}。
+            {user.recoveryCodesLeft === 0 && '（已用完，请重新生成）'}。
           </p>
-          {bootstrap.forceTotp ? (
-            <p className="hint">管理员要求所有账号开启两步验证，因此不能关闭。手机丢失时请使用恢复码登录，或请管理员重置。</p>
-          ) : (
-            <form
-              className="stack"
-              onSubmit={(e) => {
-                e.preventDefault()
-                if (!password) return setProblem('请输入当前密码')
-                disable.mutate()
-              }}
-            >
-              <label className="field">
-                当前密码
-                <input className="inp" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} />
-              </label>
-              <div>
-                <button type="submit" className="btn danger" disabled={disable.isPending}>
+          {bootstrap.forceTotp && <p className="hint">管理员要求所有账号开启两步验证，因此不能关闭。手机丢失时请使用恢复码登录，或请管理员重置。</p>}
+          <form className="stack" onSubmit={(e) => e.preventDefault()}>
+            <label className="field">
+              当前密码
+              <input className="inp" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} />
+              <span className="hint">重新生成恢复码或关闭两步验证都需要确认密码。</span>
+            </label>
+            <div className="inline wrap">
+              <button
+                type="button"
+                className="btn"
+                disabled={regenerate.isPending}
+                onClick={() => {
+                  if (!password) return setProblem('请输入当前密码')
+                  regenerate.mutate()
+                }}
+              >
+                重新生成恢复码
+              </button>
+              {!bootstrap.forceTotp && (
+                <button
+                  type="button"
+                  className="btn danger"
+                  disabled={disable.isPending}
+                  onClick={() => {
+                    if (!password) return setProblem('请输入当前密码')
+                    disable.mutate()
+                  }}
+                >
                   关闭两步验证
                 </button>
-              </div>
-            </form>
-          )}
+              )}
+            </div>
+          </form>
         </>
       ) : pending ? (
         <form

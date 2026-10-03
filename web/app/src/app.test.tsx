@@ -149,21 +149,30 @@ describe('console shell', () => {
     mockApi(adminRoutes())
     renderAt('/')
     const nav = await screen.findByRole('complementary', { name: '主导航' })
-    for (const label of ['仪表盘', '用户', '隧道', '设备', '域名', '端口池', '审计日志', '系统设置', '账号安全']) {
+    for (const label of ['仪表盘', '用户', '隧道', '设备', '申请审批', '域名', '端口池', '审计日志', '通知渠道', '系统设置', '账号安全']) {
       expect(within(nav).getByRole('link', { name: label })).toBeInTheDocument()
     }
     expect(screen.getByText('Nya 的家庭网络')).toBeInTheDocument()
   })
 
+  it('shows the number of pending requests next to 申请审批', async () => {
+    mockApi({ ...adminRoutes(), 'GET /requests': { requests: [], pending: 3 } })
+    renderAt('/')
+    const nav = await screen.findByRole('complementary', { name: '主导航' })
+    expect(await within(nav).findByLabelText('3 条待处理')).toHaveTextContent('3')
+  })
+
   it('gives normal users their own pages and keeps admin pages closed', async () => {
     mockApi(userRoutes())
-    renderAt('/')
+    const { router } = renderAt('/')
     expect(await screen.findByRole('heading', { name: '我的隧道' })).toBeInTheDocument()
     const nav = screen.getByRole('complementary', { name: '主导航' })
-    expect(within(nav).getAllByRole('link').map((a) => a.textContent)).toEqual(['我的隧道', '我的设备', '账号安全'])
-    // Read-only: no create / edit buttons.
-    expect(screen.queryByRole('button', { name: /新建隧道/ })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: '编辑' })).not.toBeInTheDocument()
+    expect(within(nav).getAllByRole('link').map((a) => a.textContent)).toEqual(['我的隧道', '我的设备', '我的申请', '自定义域名', '账号安全'])
+    // Self-service: users may create and edit their own tunnels (the server checks the quota).
+    expect(screen.getByRole('button', { name: /新建隧道/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /申请隧道/ })).toBeInTheDocument()
+    await router.navigate({ to: '/users' })
+    expect(await screen.findByText(/该页面仅管理员可访问/)).toBeInTheDocument()
   })
 
   it('only offers the security page while TOTP setup is mandatory', async () => {

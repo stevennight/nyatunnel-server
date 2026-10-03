@@ -3,7 +3,7 @@ import { useMemo, useState } from 'react'
 import { AUDIT_PAGE, describeError, listAudit } from '../api'
 import { Empty, Loading, Notice, PageHead, Tag } from '../components/ui'
 import { dateTime } from '../format'
-import { actionTone, actorLabel, auditActions, isDenial } from '../labels'
+import { actionTone, actorLabel, auditActions, needsAttention } from '../labels'
 import type { AuditEvent } from '../types'
 
 type Filter = 'all' | 'denied' | 'admin' | 'device'
@@ -20,7 +20,7 @@ export function AuditPage() {
   const events = useMemo(() => {
     const all = audit.data?.pages.flatMap((p) => p.events) ?? []
     return all.filter((e) => {
-      if (filter === 'denied') return isDenial(e.action)
+      if (filter === 'denied') return needsAttention(e.action)
       if (filter === 'device') return e.action.startsWith('device.') || e.action.startsWith('enroll.') || e.actorType === 'device'
       if (filter === 'admin') return e.actorType === 'user' && !e.action.startsWith('auth.')
       return true
@@ -29,10 +29,10 @@ export function AuditPage() {
 
   return (
     <>
-      <PageHead title="审计日志" hint="管理操作、设备注册与被拒绝的请求都会留痕，便于追溯滥用来源。">
+      <PageHead title="审计日志" hint="管理操作、设备注册、被拒绝的请求和访客举报都会留痕，便于追溯滥用来源。">
         <select className="inp auto" aria-label="筛选事件" value={filter} onChange={(e) => setFilter(e.target.value as Filter)}>
           <option value="all">全部事件</option>
-          <option value="denied">仅失败与拒绝</option>
+          <option value="denied">仅失败、拒绝与举报</option>
           <option value="admin">管理操作</option>
           <option value="device">设备与注册</option>
         </select>
@@ -79,7 +79,7 @@ export function AuditPage() {
 }
 
 export function AuditRow({ e }: { e: AuditEvent }) {
-  const denied = isDenial(e.action)
+  const denied = needsAttention(e.action)
   return (
     <tr className={denied ? 'denied' : undefined}>
       <td>{dateTime(e.at)}</td>

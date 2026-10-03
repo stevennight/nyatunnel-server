@@ -172,7 +172,7 @@ func TestTunnelRequests(t *testing.T) {
 	if code := e.alice.do("POST", "/api/v1/requests", map[string]any{"type": "tcp", "localIp": "127.0.0.1", "localPort": 22}, &flood); code != 400 || flood.Error != "too_many_requests" {
 		t.Fatalf("request flood: %d %s", code, flood.Error)
 	}
-	if code := e.admin.do("POST", "/api/v1/requests/"+other+"/reject", map[string]any{"note": "no"}, nil); code != 404 {
+	if code := e.admin.do("POST", "/api/v1/requests/"+other+"/reject", map[string]any{"note": "no"}, nil); code != 409 {
 		t.Fatalf("reject a cancelled request: %d", code)
 	}
 }

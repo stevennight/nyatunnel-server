@@ -66,7 +66,7 @@ describe('enrollment dialog', () => {
     await user.click(within(dialog).getByRole('button', { name: '生成注册码' }))
     expect(await within(dialog).findByRole('img', { name: '注册链接二维码' })).toBeInTheDocument()
     expect(within(dialog).getByRole('timer')).toHaveTextContent('已过期')
-    const post = calls.find((c) => c.path === '/enrollments')!
+    const post = calls.find((c) => c.method === 'POST' && c.path === '/enrollments')!
     expect(post.body).toEqual({ deviceNameHint: '', tunnelIds: [], ttlMinutes: 10 })
   })
 })

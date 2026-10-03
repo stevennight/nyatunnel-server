@@ -640,7 +640,7 @@ td.clip.wide {
 .form > .row {
   margin-bottom: 10px;
 }
-.form .row.top {
+.form .row.align-top {
   align-items: start;
 }
 .form .row > label,
@@ -760,6 +760,135 @@ td.clip.wide {
 }
 
 /* --- responsive --- */
+/* --- M3: requests, charts, badges --- */
+.mt-sm {
+  margin-top: 6px;
+}
+.mt-lg {
+  margin-top: 28px;
+}
+.mb {
+  margin-bottom: 12px;
+}
+.ttl.tight {
+  margin-bottom: 8px;
+  align-items: center;
+}
+textarea.inp {
+  resize: vertical;
+  min-height: 38px;
+  line-height: 1.45;
+}
+.pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.badge {
+  margin-left: auto;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--bad);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+}
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--panel);
+}
+.seg button {
+  border: none;
+  background: none;
+  color: var(--muted);
+  padding: 6px 12px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.seg button + button {
+  border-left: 1px solid var(--line);
+}
+.seg button.on {
+  background: var(--brand-weak);
+  color: var(--brand);
+  font-weight: 600;
+}
+.kv {
+  display: grid;
+  grid-template-columns: 80px minmax(0, 1fr);
+  gap: 4px 12px;
+  margin: 0 0 4px;
+  font-size: 13px;
+}
+.kv dt {
+  color: var(--muted);
+}
+.kv dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.cards.three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.link-card {
+  display: block;
+  color: inherit;
+  text-decoration: none;
+}
+.link-card:hover {
+  border-color: var(--brand);
+}
+.chart {
+  margin: 0;
+}
+.chart svg {
+  display: block;
+  width: 100%;
+  height: 120px;
+}
+.chart .axis {
+  stroke: var(--line);
+}
+.chart .hit {
+  fill: transparent;
+}
+.chart .in {
+  fill: var(--brand);
+}
+.chart .out {
+  fill: #c084fc;
+}
+.chart-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+.legend i {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  margin: 0 2px 0 6px;
+  vertical-align: 0;
+}
+.legend i.in {
+  background: var(--brand);
+}
+.legend i.out {
+  background: #c084fc;
+}
+
 @media (max-width: 1100px) {
   .grid2 {
     grid-template-columns: minmax(0, 1fr);
@@ -804,6 +933,9 @@ td.clip.wide {
   }
   .cards {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .cards.three {
+    grid-template-columns: minmax(0, 1fr);
   }
   .form .row {
     grid-template-columns: minmax(0, 1fr);

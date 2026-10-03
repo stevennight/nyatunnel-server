@@ -2,13 +2,13 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import { UserPlus } from 'lucide-react'
-import { describeError, listDevices, listUsers, renameDevice, revokeDevice } from '../api'
+import { cancelEnrollment, describeError, listDevices, listEnrollments, listTunnels, listUsers, renameDevice, revokeDevice } from '../api'
 import { EnrollDialog } from '../components/enroll-dialog'
 import { ConfirmDialog, Dot, Empty, Loading, Modal, Notice, PageHead, Tag } from '../components/ui'
-import { ago, dateTime } from '../format'
+import { ago, dateTime, until } from '../format'
 import { POLL_MS } from '../query'
 import { useSession } from '../session'
-import type { Device } from '../types'
+import type { Device, PendingEnrollment } from '../types'
 
 export function DevicesPage() {
   const { isAdmin } = useSession()
@@ -138,10 +138,88 @@ export function DevicesPage() {
         </div>
       )}
 
+      <PendingInvitations />
+
       {invite && <EnrollDialog onClose={() => setInvite(false)} />}
       {renaming && <RenameDialog device={renaming} onClose={() => setRenaming(null)} />}
       {revoking && <RevokeDialog device={revoking} onClose={() => setRevoking(null)} />}
     </>
+  )
+}
+
+/** Codes that were generated but not used yet; cancelling one makes it unusable at once. */
+function PendingInvitations() {
+  const { isAdmin } = useSession()
+  const enrollments = useQuery({ queryKey: ['enrollments'], queryFn: listEnrollments, refetchInterval: POLL_MS })
+  const tunnels = useQuery({ queryKey: ['tunnels'], queryFn: () => listTunnels() })
+  const [cancelling, setCancelling] = useState<PendingEnrollment | null>(null)
+  const now = Date.now()
+  const rows = (enrollments.data?.enrollments ?? []).filter((e) => e.expiresAt > now)
+  if (enrollments.isError) return <Notice tone="bad">{describeError(enrollments.error)}</Notice>
+  if (rows.length === 0) return null
+  const tunnelName = (id: string) => tunnels.data?.tunnels.find((t) => t.id === id)?.name ?? id
+  return (
+    <section aria-label="未使用的邀请" className="mt-lg">
+      <div className="ttl">
+        <h3>未使用的邀请</h3>
+        <span className="hint">注册码本身不保存在服务端，只能看到用途和有效期。不再需要时可以取消。</span>
+      </div>
+      <div className="tbl">
+        <table>
+          <thead>
+            <tr>
+              <th>设备名（建议）</th>
+              {isAdmin && <th>用户</th>}
+              <th>预分配隧道</th>
+              <th>生成于</th>
+              <th>过期</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((e) => (
+              <tr key={e.id}>
+                <td>{e.deviceNameHint || <span className="hint">未填写</span>}</td>
+                {isAdmin && <td>{e.username}</td>}
+                <td>{e.tunnelIds.length ? e.tunnelIds.map(tunnelName).join('、') : <span className="hint">—</span>}</td>
+                <td title={dateTime(e.createdAt)}>{ago(e.createdAt)}</td>
+                <td title={dateTime(e.expiresAt)}>{until(e.expiresAt)}</td>
+                <td>
+                  <button type="button" className="btn sm danger" onClick={() => setCancelling(e)}>
+                    取消邀请
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {cancelling && <CancelInvitationDialog enrollment={cancelling} onClose={() => setCancelling(null)} />}
+    </section>
+  )
+}
+
+function CancelInvitationDialog({ enrollment, onClose }: { enrollment: PendingEnrollment; onClose: () => void }) {
+  const client = useQueryClient()
+  const mutation = useMutation({
+    mutationFn: () => cancelEnrollment(enrollment.id),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ['enrollments'] })
+      onClose()
+    },
+  })
+  return (
+    <ConfirmDialog
+      title="取消邀请"
+      confirmLabel="取消邀请"
+      danger
+      busy={mutation.isPending}
+      error={mutation.isError ? describeError(mutation.error) : null}
+      onConfirm={() => mutation.mutate()}
+      onClose={onClose}
+    >
+      确定取消这个注册码{enrollment.deviceNameHint ? `（${enrollment.deviceNameHint}）` : ''}？取消后它立即失效，已经发出的链接和命令都无法再使用。
+    </ConfirmDialog>
   )
 }
 

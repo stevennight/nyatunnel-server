@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"nyatunnel-server/internal/server/auth"
+	"nyatunnel-server/internal/server/edge"
 	"nyatunnel-server/internal/server/notify"
 	"nyatunnel-server/internal/server/rules"
 	"nyatunnel-server/internal/server/store"
@@ -62,7 +63,10 @@ func (s *server) handleTunnelLogin(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	tunnelID, cb, ret := q.Get("t"), q.Get("cb"), q.Get("r")
 	if !s.Edge.LoginCallbackOK(tunnelID, cb) {
-		writeError(w, http.StatusBadRequest, "invalid_gate_request", "")
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>链接无效</title></head>` +
+			`<body style="font-family:system-ui,sans-serif;display:grid;place-items:center;min-height:90vh"><main style="text-align:center"><h1>链接无效</h1><p>这个登录链接无效或已过期，请回到原网页重新访问。</p></main></body></html>`))
 		return
 	}
 	p, err := s.authenticate(w, r)
@@ -239,7 +243,16 @@ func (s *server) handleMe(w http.ResponseWriter, r *http.Request, p *principal) 
 	v := viewUser(p.user)
 	left := len(p.user.RecoveryCodes)
 	v.RecoveryCodesLeft = &left
-	writeJSON(w, http.StatusOK, map[string]any{"user": v, "mustSetupTotp": !p.user.TOTPEnabled() && s.forceTOTP(r.Context())})
+	q := p.user.Quota
+	if q.Types == nil {
+		q.Types = []string{}
+	}
+	tunnels, _ := s.Store.TunnelCount(r.Context(), p.user.ID)
+	month, _ := s.Store.TrafficByUser(r.Context(), edge.MonthStart(s.now()))
+	writeJSON(w, http.StatusOK, map[string]any{
+		"user": v, "mustSetupTotp": !p.user.TOTPEnabled() && s.forceTOTP(r.Context()),
+		"quota": q, "tunnelCount": tunnels, "monthBytes": month[p.user.ID].Bytes(),
+	})
 }
 
 // handleChangePassword needs the current password; other sessions of the user are ended.
