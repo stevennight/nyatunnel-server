@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	github.com/coder/websocket v1.8.15
-	github.com/stevennight/nyatunnel-common v0.0.0-20261003172318-bd14ad4e9c9c
+	github.com/stevennight/nyatunnel-common v0.1.0
 	golang.org/x/crypto v0.57.0
 	golang.org/x/time v0.16.0
 	modernc.org/sqlite v1.60.1
