@@ -31,9 +31,10 @@ COPY --from=go-build /out/nyatunnel-server /usr/local/bin/nyatunnel-server
 COPY --from=web /src/.tmp-webdist /app/.tmp-webdist
 COPY deploy/docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
-EXPOSE 8080
+# Console and API on 8080, HTTP tunnel ingress on 8081; meant for host networking behind Caddy.
+EXPOSE 8080 8081
 ENV NYATUNNEL_DATA=/data \
-    NYATUNNEL_LISTEN=:8080 \
+    NYATUNNEL_LISTEN=127.0.0.1:8080 \
     NYATUNNEL_WEB_DIR=/app/.tmp-webdist
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD ["/usr/local/bin/nyatunnel-server", "--healthcheck"]
