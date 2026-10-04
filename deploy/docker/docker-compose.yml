@@ -1,12 +1,16 @@
-name: nyatunnel
+name: ${NYATUNNEL_PROJECT:-nyatunnel}
 
-# Runs next to an existing Caddy on the same host (see deploy/caddy/Caddyfile and docs/设计方案.md §12).
-# Host networking: NyaTunnel listens on 127.0.0.1:8080/8081/8082 for Caddy, and opens the TCP/UDP
-# tunnel ports from the port pools directly on the host.
+# Copy this file and .env.example (as .env) into a deployment directory and run
+#   docker compose up -d
+# Everything machine-specific lives in .env; data stays in the deployment directory (./data, ./secrets)
+# so backing up the directory backs up the service.
+#
+# Host networking: NyaTunnel listens on loopback ports for the reverse proxy (Caddy) and opens the
+# TCP/UDP tunnel ports from the port pools directly on the host.
 services:
   server:
-    container_name: nyatunnel-server
-    image: "${NYATUNNEL_IMAGE:?set in deploy/docker/.env}:${NYATUNNEL_VERSION:?set in deploy/docker/.env}"
+    container_name: ${NYATUNNEL_CONTAINER:-nyatunnel-server}
+    image: "${NYATUNNEL_IMAGE:-ghcr.io/stevennight/nyatunnel-server}:${NYATUNNEL_VERSION:?set NYATUNNEL_VERSION in .env}"
     restart: unless-stopped
     network_mode: host
     read_only: true
@@ -15,7 +19,7 @@ services:
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev
     environment:
-      NYATUNNEL_PUBLIC_URL: ${NYATUNNEL_PUBLIC_URL:?set in deploy/docker/.env}
+      NYATUNNEL_PUBLIC_URL: ${NYATUNNEL_PUBLIC_URL:?set NYATUNNEL_PUBLIC_URL in .env}
       NYATUNNEL_LISTEN: ${NYATUNNEL_LISTEN:-127.0.0.1:8080}
       NYATUNNEL_INGRESS_LISTEN: ${NYATUNNEL_INGRESS_LISTEN:-127.0.0.1:8081}
       NYATUNNEL_INTERNAL_LISTEN: ${NYATUNNEL_INTERNAL_LISTEN:-127.0.0.1:8082}
@@ -24,14 +28,15 @@ services:
       NYATUNNEL_TRUSTED_PROXY_CIDRS: ${NYATUNNEL_TRUSTED_PROXY_CIDRS:-127.0.0.1/32,::1/128}
       NYATUNNEL_DIRECT_LISTEN: ${NYATUNNEL_DIRECT_LISTEN:-}
       NYATUNNEL_DIRECT_ADDR: ${NYATUNNEL_DIRECT_ADDR:-}
+      NYATUNNEL_SESSION_TTL: ${NYATUNNEL_SESSION_TTL:-720h}
+      TZ: ${TZ:-Asia/Shanghai}
       NYATUNNEL_DATA: /data
-      # Keep the secrets key outside the data directory (and back it up): without it TOTP secrets cannot be opened.
       NYATUNNEL_SECRETS_KEY_FILE: /secrets/secrets.key
     volumes:
-      - ../../data:/data
-      - ../../secrets:/secrets
+      - ${NYATUNNEL_DATA_DIR:-./data}:/data
+      - ${NYATUNNEL_SECRETS_DIR:-./secrets}:/secrets
     logging:
       driver: json-file
       options:
-        max-size: "10m"
-        max-file: "3"
+        max-size: ${LOG_MAX_SIZE:-10m}
+        max-file: "${LOG_MAX_FILE:-3}"

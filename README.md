@@ -75,10 +75,15 @@ go run ./cmd/server --version
 在已有 Caddy 之后运行：Caddy 继续占用 80/443 并负责全部证书（Cloudflare DNS-01 通配证书 + 自定义域名 on-demand）。NyaTunnel 只监听本机端口，以及对外的 TCP/UDP 端口池。完整步骤见 [设计方案 §12](docs/设计方案.md#12-部署)，Caddy 配置见 [`deploy/caddy/Caddyfile`](deploy/caddy/Caddyfile)。
 
 ```bash
-cp deploy/docker/.env.example deploy/docker/.env   # 填写 NYATUNNEL_PUBLIC_URL 等
-docker compose -f deploy/docker/docker-compose.yml --env-file deploy/docker/.env up -d
-docker logs nyatunnel-server 2>&1 | grep setup_token
+mkdir -p /opt/nyatunnel-server && cd /opt/nyatunnel-server
+curl -fsSLO https://raw.githubusercontent.com/stevennight/nyatunnel-server/main/deploy/docker/docker-compose.yml
+curl -fsSL https://raw.githubusercontent.com/stevennight/nyatunnel-server/main/deploy/docker/.env.example -o .env
+vi .env                                            # 公网地址、本机空闲端口、版本等
+docker compose up -d
+docker compose logs | grep setup_token
 ```
+
+compose 文件本身不写死任何值，全部来自同目录的 `.env`；数据在 `./data`，TOTP 主密钥在 `./secrets`，备份整个目录即可。
 
 镜像为 `ghcr.io/stevennight/nyatunnel-server`（linux/amd64、linux/arm64），compose 使用 `network_mode: host`。防火墙需放行端口池范围（以及可选的直连端口）。
 
