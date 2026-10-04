@@ -2,15 +2,23 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 )
 
 // Tunnel types.
 const (
-	TypeHTTPS = "https"
-	TypeTCP   = "tcp"
-	TypeUDP   = "udp"
+	TypeHTTPS  = "https"
+	TypeTCP    = "tcp"
+	TypeUDP    = "udp"
+	TypeTCPUDP = "tcpudp" // one remote port, both protocols
 )
+
+// UsesTCP reports whether a tunnel type listens for TCP on its remote port.
+func UsesTCP(t string) bool { return t == TypeTCP || t == TypeTCPUDP }
+
+// UsesUDP reports whether a tunnel type listens for UDP on its remote port.
+func UsesUDP(t string) bool { return t == TypeUDP || t == TypeTCPUDP }
 
 // Tunnel is one public entry point (see docs/设计方案.md §6).
 type Tunnel struct {
@@ -49,6 +57,32 @@ type Tunnel struct {
 	MaxConns       int
 	MonthlyQuotaMB int
 	QuotaAction    string // pause, alert
+
+	// Login gate scope (AccessPolicy "login"): owner, users (owner + LoginUsers) or all accounts.
+	LoginAccess string
+	LoginUsers  []string // user ids
+}
+
+// Login gate scopes.
+const (
+	LoginOwner = "owner"
+	LoginUsers = "users"
+	LoginAll   = "all"
+)
+
+// LoginAllowed reports whether userID may pass the tunnel's login gate.
+func (t *Tunnel) LoginAllowed(userID string) bool {
+	switch t.LoginAccess {
+	case LoginAll:
+		return true
+	case LoginUsers:
+		for _, id := range t.LoginUsers {
+			if id == userID {
+				return true
+			}
+		}
+	}
+	return userID == t.UserID
 }
 
 // Access policies.
@@ -67,17 +101,19 @@ func (t *Tunnel) Live(now int64) bool {
 const tunnelCols = `id, user_id, device_id, name, type, domain_id, subdomain, host, remote_port, local_ip, local_port,
 	client_can_edit_local, local_loopback_only, client_can_toggle, enabled, paused_by_client, note, expires_at, created_at, updated_at,
 	access_policy, access_password_hash, basic_username, policy_rev, ip_allowlist, interstitial, host_rewrite,
-	bandwidth_kbps, max_conns, monthly_quota_mb, quota_action`
+	bandwidth_kbps, max_conns, monthly_quota_mb, quota_action, login_access, login_users`
 
 func scanTunnel(row interface{ Scan(...any) error }) (*Tunnel, error) {
 	var t Tunnel
+	var loginUsers string
 	if err := row.Scan(&t.ID, &t.UserID, &t.DeviceID, &t.Name, &t.Type, &t.DomainID, &t.Subdomain, &t.Host, &t.RemotePort,
 		&t.LocalIP, &t.LocalPort, &t.ClientCanEditLocal, &t.LocalLoopbackOnly, &t.ClientCanToggle, &t.Enabled, &t.PausedByClient,
 		&t.Note, &t.ExpiresAt, &t.CreatedAt, &t.UpdatedAt,
 		&t.AccessPolicy, &t.AccessPasswordHash, &t.BasicUsername, &t.PolicyRev, &t.IPAllowlist, &t.Interstitial, &t.HostRewrite,
-		&t.BandwidthKbps, &t.MaxConns, &t.MonthlyQuotaMB, &t.QuotaAction); err != nil {
+		&t.BandwidthKbps, &t.MaxConns, &t.MonthlyQuotaMB, &t.QuotaAction, &t.LoginAccess, &loginUsers); err != nil {
 		return nil, notFoundOr(err)
 	}
+	_ = json.Unmarshal([]byte(loginUsers), &t.LoginUsers)
 	return &t, nil
 }
 
@@ -132,7 +168,11 @@ func (s *Store) SaveTunnel(ctx context.Context, t *Tunnel) error {
 	if t.PolicyRev == 0 {
 		t.PolicyRev = 1
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO tunnels (`+tunnelCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	if t.LoginAccess == "" {
+		t.LoginAccess = LoginOwner
+	}
+	loginUsers, _ := json.Marshal(nonNil(t.LoginUsers))
+	_, err := s.db.ExecContext(ctx, `INSERT INTO tunnels (`+tunnelCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET user_id = excluded.user_id, device_id = excluded.device_id, name = excluded.name, type = excluded.type,
 		domain_id = excluded.domain_id, subdomain = excluded.subdomain, host = excluded.host, remote_port = excluded.remote_port,
 		local_ip = excluded.local_ip, local_port = excluded.local_port, client_can_edit_local = excluded.client_can_edit_local,
@@ -141,11 +181,11 @@ func (s *Store) SaveTunnel(ctx context.Context, t *Tunnel) error {
 		access_policy = excluded.access_policy, access_password_hash = excluded.access_password_hash, basic_username = excluded.basic_username,
 		policy_rev = excluded.policy_rev, ip_allowlist = excluded.ip_allowlist, interstitial = excluded.interstitial, host_rewrite = excluded.host_rewrite,
 		bandwidth_kbps = excluded.bandwidth_kbps, max_conns = excluded.max_conns, monthly_quota_mb = excluded.monthly_quota_mb,
-		quota_action = excluded.quota_action`,
+		quota_action = excluded.quota_action, login_access = excluded.login_access, login_users = excluded.login_users`,
 		t.ID, t.UserID, t.DeviceID, t.Name, t.Type, t.DomainID, t.Subdomain, t.Host, t.RemotePort, t.LocalIP, t.LocalPort,
 		t.ClientCanEditLocal, t.LocalLoopbackOnly, t.ClientCanToggle, t.Enabled, t.PausedByClient, t.Note, t.ExpiresAt, t.CreatedAt, t.UpdatedAt,
 		t.AccessPolicy, t.AccessPasswordHash, t.BasicUsername, t.PolicyRev, t.IPAllowlist, t.Interstitial, t.HostRewrite,
-		t.BandwidthKbps, t.MaxConns, t.MonthlyQuotaMB, t.QuotaAction)
+		t.BandwidthKbps, t.MaxConns, t.MonthlyQuotaMB, t.QuotaAction, t.LoginAccess, string(loginUsers))
 	return conflictOr(err)
 }
 
@@ -261,9 +301,9 @@ func (s *Store) DeletePortPool(ctx context.Context, id string) error {
 	return s.exec1(ctx, `DELETE FROM port_pools WHERE id = ?`, id)
 }
 
-// UsedPorts returns the remote ports taken by tunnels of proto.
+// UsedPorts returns the remote ports taken for proto ("tcp" or "udp"), including tcpudp tunnels.
 func (s *Store) UsedPorts(ctx context.Context, proto string) (map[int]string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT remote_port, id FROM tunnels WHERE type = ? AND remote_port IS NOT NULL`, proto)
+	rows, err := s.db.QueryContext(ctx, `SELECT remote_port, id FROM tunnels WHERE (type = ? OR type = 'tcpudp') AND remote_port IS NOT NULL`, proto)
 	if err != nil {
 		return nil, err
 	}

@@ -2,8 +2,10 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
+	"testing/fstest"
 )
 
 func openTest(t *testing.T) *Store {
@@ -90,6 +92,70 @@ func TestTunnelUniqueness(t *testing.T) {
 	a.LocalPort = 2
 	if err := s.SaveTunnel(ctx, a); err != nil {
 		t.Fatalf("update: %v", err)
+	}
+}
+
+func TestTCPUDPPortsArePerProtocol(t *testing.T) {
+	s, ctx := openTest(t), context.Background()
+	s.CreateUser(ctx, &User{ID: "usr_a", Username: "alice", PasswordHash: "h", Role: RoleUser})
+	save := func(id, typ string, port int) error {
+		return s.SaveTunnel(ctx, &Tunnel{ID: id, UserID: "usr_a", Name: id, Type: typ, RemotePort: ptr(port), LocalIP: "127.0.0.1", LocalPort: 1})
+	}
+	if err := save("tun_1", TypeTCP, 30000); err != nil {
+		t.Fatal(err)
+	}
+	if err := save("tun_2", TypeTCPUDP, 30000); !errors.Is(err, ErrConflict) {
+		t.Fatalf("tcpudp over a tcp port: %v", err)
+	}
+	if err := save("tun_3", TypeTCPUDP, 30001); err != nil {
+		t.Fatal(err)
+	}
+	if err := save("tun_4", TypeUDP, 30001); !errors.Is(err, ErrConflict) {
+		t.Fatalf("udp over a tcpudp port: %v", err)
+	}
+	if err := save("tun_5", TypeUDP, 30000); err != nil {
+		t.Fatalf("udp next to a tcp tunnel: %v", err)
+	}
+	tcp, _ := s.UsedPorts(ctx, TypeTCP)
+	udp, _ := s.UsedPorts(ctx, TypeUDP)
+	if tcp[30001] != "tun_3" || udp[30001] != "tun_3" || udp[30000] != "tun_5" {
+		t.Fatalf("used ports tcp=%v udp=%v", tcp, udp)
+	}
+}
+
+// The tcpudp migration rebuilds the tunnels table; existing rows must survive it.
+func TestMigrationKeepsTunnels(t *testing.T) {
+	ctx := context.Background()
+	db, err := sql.Open("sqlite", dsn(":memory:"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.SetMaxOpenConns(1)
+	defer db.Close()
+	s := &Store{db: db}
+	old := fstest.MapFS{}
+	for _, name := range []string{"0001_init.sql", "0002_policies_traffic.sql", "0003_requests_quota_domains_channels.sql"} {
+		b, err := migrationFiles.ReadFile("migrations/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		old["migrations/"+name] = &fstest.MapFile{Data: b}
+	}
+	if err := s.migrate(ctx, old); err != nil {
+		t.Fatal(err)
+	}
+	s.CreateUser(ctx, &User{ID: "usr_a", Username: "alice", PasswordHash: "h", Role: RoleUser})
+	s.CreateDomain(ctx, &Domain{ID: "dom_1", Name: "t.example.com"})
+	if _, err := db.ExecContext(ctx, `INSERT INTO tunnels (id, user_id, name, type, domain_id, subdomain, host, local_ip, local_port, access_policy,
+		bandwidth_kbps, created_at, updated_at) VALUES ('tun_1', 'usr_a', 'web', 'https', 'dom_1', 'web', 'web.t.example.com', '127.0.0.1', 80, 'password', 800, 1, 2)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.migrate(ctx, migrationFiles); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.TunnelByID(ctx, "tun_1")
+	if err != nil || *got.Host != "web.t.example.com" || got.AccessPolicy != "password" || got.BandwidthKbps != 800 || got.UpdatedAt != 2 {
+		t.Fatalf("after migration: %+v %v", got, err)
 	}
 }
 

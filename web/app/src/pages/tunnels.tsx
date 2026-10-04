@@ -22,7 +22,7 @@ import {
 import { accessPolicies, tunnelTypes } from '../labels'
 import { POLL_MS } from '../query'
 import { useSession } from '../session'
-import type { AccessPolicy, AdminUser, Domain, QuotaAction, RequestInput, Tunnel, TunnelInput, TunnelRequest, TunnelType, User } from '../types'
+import type { AccessPolicy, AdminUser, Domain, LoginAccess, QuotaAction, RequestInput, Tunnel, TunnelInput, TunnelRequest, TunnelType, User } from '../types'
 import { RequestForm } from './requests'
 
 const NAME_RE = /^[a-z0-9][a-z0-9-]{0,39}$/
@@ -275,6 +275,9 @@ export type FormState = {
   /** Write-only; empty keeps the stored password. */
   accessPassword: string
   basicUsername: string
+  loginAccess: LoginAccess
+  /** Comma separated usernames. */
+  loginUsers: string
   ipAllowlist: string
   interstitial: boolean
   hostRewrite: string
@@ -304,6 +307,8 @@ export function emptyForm(selfId: string): FormState {
     accessPolicy: 'public',
     accessPassword: '',
     basicUsername: '',
+    loginAccess: 'owner',
+    loginUsers: '',
     ipAllowlist: '',
     interstitial: false,
     hostRewrite: '',
@@ -334,6 +339,8 @@ function formFromTunnel(t: Tunnel): FormState {
     accessPolicy: t.accessPolicy || 'public',
     accessPassword: '',
     basicUsername: t.basicUsername ?? '',
+    loginAccess: t.loginAccess || 'owner',
+    loginUsers: (t.loginUsers ?? []).join(', '),
     ipAllowlist: t.ipAllowlist ?? '',
     interstitial: t.interstitial,
     hostRewrite: t.hostRewrite ?? '',
@@ -549,6 +556,12 @@ export function TunnelForm({
       if (password && [...password].length < 6) return setProblem('访问密码至少 6 个字符')
     }
     if (https && policy === 'basic' && !f.basicUsername.trim()) return setProblem('请设置 Basic 认证用户名')
+    const loginUsers = f.loginUsers
+      .split(/[\s,，]+/)
+      .map((u) => u.trim().toLowerCase())
+      .filter(Boolean)
+    const loginAccess: LoginAccess = https && policy === 'login' ? f.loginAccess : 'owner'
+    if (loginAccess === 'users' && loginUsers.length === 0) return setProblem('请填写允许访问的用户名')
     const bw = parseAmount(f.bandwidthMbps)
     const conns = parseAmount(f.maxConns)
     const quota = parseAmount(f.quotaGb)
@@ -574,6 +587,8 @@ export function TunnelForm({
       expiresAt: fromLocalInput(f.expiresAt),
       accessPolicy: policy,
       basicUsername: https && policy === 'basic' ? f.basicUsername.trim() : '',
+      loginAccess,
+      loginUsers: loginAccess === 'users' ? loginUsers : [],
       ipAllowlist: f.ipAllowlist
         .split(/[\s,，]+/)
         .filter(Boolean)
@@ -643,7 +658,9 @@ export function TunnelForm({
                 <option value="https">HTTPS（Caddy 终止 TLS）</option>
                 <option value="tcp">TCP</option>
                 <option value="udp">UDP</option>
+                <option value="tcpudp">TCP+UDP（同一端口）</option>
               </select>
+              {f.type === 'tcpudp' && <div className="hint">同一个公网端口同时转发 TCP 和 UDP，端口需同时位于 TCP 与 UDP 端口池内。</div>}
               {tunnel && <div className="hint">类型创建后不能修改。</div>}
             </div>
           </div>
@@ -788,9 +805,33 @@ export function TunnelForm({
                 )}
               </select>
               {!https && <div className="hint">TCP / UDP 隧道只能公开访问，可用下面的 IP 白名单限制来源。</div>}
-              {https && f.accessPolicy === 'login' && <div className="hint">访客需要先登录本后台（任意未禁用的账号）。</div>}
+              {https && f.accessPolicy === 'login' && <div className="hint">访客需要先登录本后台的账号。</div>}
             </div>
           </div>
+          {https && f.accessPolicy === 'login' && (
+            <div className="row">
+              <label htmlFor="tf-login-access">允许谁访问</label>
+              <div>
+                <select id="tf-login-access" className="inp" value={f.loginAccess} onChange={(e) => set('loginAccess', e.target.value as LoginAccess)}>
+                  <option value="owner">仅隧道所有人</option>
+                  <option value="users">隧道所有人 + 指定用户</option>
+                  <option value="all">本站所有账号</option>
+                </select>
+                {f.loginAccess === 'users' && (
+                  <input
+                    id="tf-login-users"
+                    className="inp"
+                    style={{ marginTop: 6 }}
+                    aria-label="允许访问的用户名"
+                    placeholder="用户名，用逗号分隔"
+                    value={f.loginUsers}
+                    onChange={(e) => set('loginUsers', e.target.value)}
+                  />
+                )}
+                <div className="hint">修改访问范围后，之前已通过门禁的访客需要重新登录。</div>
+              </div>
+            </div>
+          )}
           {https && f.accessPolicy === 'basic' && (
             <div className="row">
               <label htmlFor="tf-basic-user">Basic 用户名</label>

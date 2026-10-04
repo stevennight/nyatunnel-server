@@ -230,10 +230,11 @@ func (e *Edge) Reload(ctx context.Context) error {
 		case t.RemotePort != nil && r.live(now):
 			// Ports of tunnels that cannot carry traffic stay closed, so scanners see nothing.
 			r.Port = *t.RemotePort
-			if t.Type == store.TypeUDP {
-				wantUDP[r.Port] = r
-			} else {
+			if store.UsesTCP(t.Type) {
 				wantTCP[r.Port] = r
+			}
+			if store.UsesUDP(t.Type) {
+				wantUDP[r.Port] = r
 			}
 		}
 	}

@@ -77,7 +77,7 @@ func (s *Store) CancelEnrollment(ctx context.Context, id string, now int64) erro
 // PortsInRange counts tunnels using ports of proto inside [start, end].
 func (s *Store) PortsInRange(ctx context.Context, proto string, start, end int) (int, error) {
 	var n int
-	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tunnels WHERE type = ? AND remote_port BETWEEN ? AND ?`, proto, start, end).Scan(&n)
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tunnels WHERE (type = ? OR type = 'tcpudp') AND remote_port BETWEEN ? AND ?`, proto, start, end).Scan(&n)
 	return n, err
 }
 

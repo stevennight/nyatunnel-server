@@ -239,13 +239,32 @@ func (d *fakeDevice) serve(s net.Conn) {
 		tunnelproto.WriteStreamReply(s, tunnelproto.ReplyUnknownTunnel)
 		return
 	}
-	local, err := net.Dial("tcp", net.JoinHostPort(target.LocalIP, strconv.Itoa(target.LocalPort)))
+	local, err := net.Dial(h.Proto, net.JoinHostPort(target.LocalIP, strconv.Itoa(target.LocalPort)))
 	if err != nil {
 		tunnelproto.WriteStreamReply(s, tunnelproto.ReplyDialFailed)
 		return
 	}
 	defer local.Close()
 	tunnelproto.WriteStreamReply(s, tunnelproto.ReplyOK)
+	if h.Proto == "udp" {
+		go func() {
+			buf := make([]byte, tunnelproto.MaxDatagram)
+			for {
+				n, err := local.Read(buf)
+				if err != nil || tunnelproto.WriteDatagram(s, buf[:n]) != nil {
+					return
+				}
+			}
+		}()
+		buf := make([]byte, tunnelproto.MaxDatagram)
+		for {
+			d, err := tunnelproto.ReadDatagram(s, buf)
+			if err != nil {
+				return
+			}
+			local.Write(d)
+		}
+	}
 	go func() {
 		io.Copy(local, s)
 		local.(*net.TCPConn).CloseWrite() // like the real agent: pass the visitor's EOF on

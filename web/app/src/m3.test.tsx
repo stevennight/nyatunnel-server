@@ -104,6 +104,35 @@ describe('tunnel form: access control and limits', () => {
     })
   })
 
+  it('sets who may pass a login gate', async () => {
+    const calls = mockApi({
+      ...adminRoutes(),
+      'GET /tunnels': { tunnels: [tunnel({ accessPolicy: 'login', loginAccess: 'users', loginUsers: ['bob'] })] },
+      'PUT /tunnels/tun_1': { tunnel: tunnel() },
+    })
+    renderAt('/tunnels')
+    const { user, form } = await openForm('编辑')
+    expect(within(form).getByLabelText('允许谁访问')).toHaveValue('users')
+    const names = within(form).getByLabelText('允许访问的用户名')
+    expect(names).toHaveValue('bob')
+    await user.clear(names)
+    await user.click(within(form).getByRole('button', { name: '保存并下发' }))
+    expect(await within(form).findByRole('alert')).toHaveTextContent('请填写允许访问的用户名')
+    await user.type(names, 'Bob， carol')
+    await user.click(within(form).getByRole('button', { name: '保存并下发' }))
+    const put = await found(calls, 'PUT', '/tunnels/tun_1')
+    expect(put.body).toMatchObject({ accessPolicy: 'login', loginAccess: 'users', loginUsers: ['bob', 'carol'] })
+
+    // Saving closes the form; open it again and narrow the scope to the owner.
+    calls.length = 0
+    const again = await openForm('编辑')
+    await again.user.selectOptions(within(again.form).getByRole('combobox', { name: '允许谁访问' }), 'owner')
+    expect(within(again.form).queryByLabelText('允许访问的用户名')).not.toBeInTheDocument()
+    await again.user.click(within(again.form).getByRole('button', { name: '保存并下发' }))
+    const put2 = await found(calls, 'PUT', '/tunnels/tun_1')
+    expect(put2.body).toMatchObject({ loginAccess: 'owner', loginUsers: [] })
+  })
+
   it('hides the HTTPS-only options for TCP and converts the limits', async () => {
     const calls = mockApi({ ...adminRoutes(), 'POST /tunnels': { status: 201, body: { tunnel: tunnel() } } })
     renderAt('/tunnels')

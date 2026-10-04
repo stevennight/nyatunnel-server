@@ -37,7 +37,7 @@ export function DashboardPage() {
                 {d.tunnelsRunning} <small>/ {d.tunnels}</small>
               </div>
               <div className="s">
-                HTTPS {d.tunnelsByType.https ?? 0} · TCP {d.tunnelsByType.tcp ?? 0} · UDP {d.tunnelsByType.udp ?? 0}
+                HTTPS {d.tunnelsByType.https ?? 0} · TCP {d.tunnelsByType.tcp ?? 0} · UDP {d.tunnelsByType.udp ?? 0} · TCP+UDP {d.tunnelsByType.tcpudp ?? 0}
               </div>
             </div>
             <div className="card">

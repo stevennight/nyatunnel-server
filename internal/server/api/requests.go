@@ -65,9 +65,9 @@ func (s *server) handleListRequests(w http.ResponseWriter, r *http.Request, p *p
 // validRequest checks a request payload loosely: the administrator decides the details.
 func validRequest(pl *store.RequestPayload, reason string) error {
 	switch pl.Type {
-	case store.TypeHTTPS, store.TypeTCP, store.TypeUDP:
+	case store.TypeHTTPS, store.TypeTCP, store.TypeUDP, store.TypeTCPUDP:
 	default:
-		return &rules.Error{Code: "invalid_type", Message: "类型必须是 https、tcp 或 udp"}
+		return &rules.Error{Code: "invalid_type", Message: "类型必须是 https、tcp、udp 或 tcpudp"}
 	}
 	if err := rules.LocalTarget(pl.LocalIP, pl.LocalPort, false); err != nil {
 		return err

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -50,7 +51,10 @@ type tunnelView struct {
 	MonthlyQuotaMB     int     `json:"monthlyQuotaMb"`
 	QuotaAction        string  `json:"quotaAction"`
 	MonthBytes         int64   `json:"monthBytes"`
-	ActiveConns        int64   `json:"activeConns"`
+	// LoginAccess is owner, users or all; LoginUsers are the extra usernames for "users".
+	LoginAccess string   `json:"loginAccess"`
+	LoginUsers  []string `json:"loginUsers"`
+	ActiveConns int64    `json:"activeConns"`
 	// State is running, offline, paused, disabled, expired, over_quota, unassigned or error.
 	State      string `json:"state"`
 	StateError string `json:"stateError,omitempty"`
@@ -66,6 +70,12 @@ func (s *server) viewTunnel(t *store.Tunnel, users, devices map[string]string, m
 		Interstitial: t.Interstitial, HostRewrite: t.HostRewrite, BandwidthKbps: t.BandwidthKbps, MaxConns: t.MaxConns,
 		MonthlyQuotaMB: t.MonthlyQuotaMB, QuotaAction: t.QuotaAction,
 		MonthBytes: month[t.ID].Bytes() + s.Edge.PendingTraffic(t.ID), ActiveConns: s.Edge.Active(t.ID),
+		LoginAccess: t.LoginAccess, LoginUsers: []string{},
+	}
+	for _, id := range t.LoginUsers {
+		if name := users[id]; name != "" {
+			v.LoginUsers = append(v.LoginUsers, name)
+		}
 	}
 	now := s.now().UnixMilli()
 	switch {
@@ -159,6 +169,9 @@ type tunnelInput struct {
 	MaxConns       int     `json:"maxConns"`
 	MonthlyQuotaMB int     `json:"monthlyQuotaMb"`
 	QuotaAction    string  `json:"quotaAction"`
+	// Login gate scope: owner (default), users (owner + LoginUsers) or all.
+	LoginAccess string   `json:"loginAccess"`
+	LoginUsers  []string `json:"loginUsers"` // usernames
 }
 
 func (s *server) handleCreateTunnel(w http.ResponseWriter, r *http.Request, p *principal) {
@@ -360,7 +373,7 @@ func (s *server) applyTunnelInput(w http.ResponseWriter, r *http.Request, t *sto
 		}
 		host := sub + "." + d.Name
 		t.DomainID, t.Subdomain, t.Host, t.RemotePort = &d.ID, &sub, &host, nil
-	case store.TypeTCP, store.TypeUDP:
+	case store.TypeTCP, store.TypeUDP, store.TypeTCPUDP:
 		port, err := s.pickPort(ctx, in.Type, in.RemotePort, t.ID)
 		if err != nil {
 			s.fail(w, "tunnel", err)
@@ -368,15 +381,53 @@ func (s *server) applyTunnelInput(w http.ResponseWriter, r *http.Request, t *sto
 		}
 		t.DomainID, t.Subdomain, t.Host, t.RemotePort = nil, nil, nil, &port
 	default:
-		return bad("invalid_type", "类型必须是 https、tcp 或 udp")
+		return bad("invalid_type", "类型必须是 https、tcp、udp 或 tcpudp")
 	}
-	return s.applyPolicy(w, t, in, old)
+	return s.applyPolicy(ctx, w, t, in, old)
+}
+
+// loginScope validates the login gate scope and resolves usernames to ids (sorted, unique).
+func (s *server) loginScope(ctx context.Context, w http.ResponseWriter, in *tunnelInput, ownerID string) (string, []string, bool) {
+	access := in.LoginAccess
+	if access == "" {
+		access = store.LoginOwner
+	}
+	if access != store.LoginOwner && access != store.LoginUsers && access != store.LoginAll {
+		writeError(w, http.StatusBadRequest, "invalid_login_access", "登录门禁范围无效")
+		return "", nil, false
+	}
+	ids := []string{}
+	if access != store.LoginUsers {
+		return access, ids, true
+	}
+	seen := map[string]bool{}
+	for _, name := range in.LoginUsers {
+		name = strings.ToLower(strings.TrimSpace(name))
+		if name == "" {
+			continue
+		}
+		u, err := s.Store.UserByName(ctx, name)
+		if err != nil || u.DisabledAt != nil {
+			writeError(w, http.StatusBadRequest, "unknown_user", "用户 "+name+" 不存在或已禁用")
+			return "", nil, false
+		}
+		if u.ID != ownerID && !seen[u.ID] {
+			seen[u.ID] = true
+			ids = append(ids, u.ID)
+		}
+	}
+	if len(ids) == 0 {
+		writeError(w, http.StatusBadRequest, "login_users_required", "请填写允许访问的用户")
+		return "", nil, false
+	}
+	sort.Strings(ids)
+	return access, ids, true
 }
 
 var hostRewriteRE = regexp.MustCompile(`^[A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?$`)
 
 // applyPolicy validates the access policy and limits.
-func (s *server) applyPolicy(w http.ResponseWriter, t *store.Tunnel, in *tunnelInput, old *store.Tunnel) bool {
+func (s *server) applyPolicy(ctx context.Context, w http.ResponseWriter, t *store.Tunnel, in *tunnelInput, old *store.Tunnel) bool {
 	bad := func(code, msg string) bool {
 		writeError(w, http.StatusBadRequest, code, msg)
 		return false
@@ -439,54 +490,98 @@ func (s *server) applyPolicy(w http.ResponseWriter, t *store.Tunnel, in *tunnelI
 	if policy == store.PolicyBasic && strings.TrimSpace(in.BasicUsername) == "" {
 		return bad("basic_username_required", "请设置 Basic 认证用户名")
 	}
+	access, loginUsers, ok := s.loginScope(ctx, w, in, t.UserID)
+	if !ok {
+		return false
+	}
+	if old != nil && (old.LoginAccess != access || strings.Join(old.LoginUsers, ",") != strings.Join(loginUsers, ",")) {
+		rev++ // narrowing who may enter must sign out everyone who entered under the old rule
+	}
+	t.LoginAccess, t.LoginUsers = access, loginUsers
 	t.AccessPolicy, t.AccessPasswordHash, t.BasicUsername, t.PolicyRev = policy, hash, strings.TrimSpace(in.BasicUsername), rev
 	t.IPAllowlist, t.Interstitial, t.HostRewrite = strings.TrimSpace(in.IPAllowlist), in.Interstitial, strings.TrimSpace(in.HostRewrite)
 	t.BandwidthKbps, t.MaxConns, t.MonthlyQuotaMB, t.QuotaAction = in.BandwidthKbps, in.MaxConns, in.MonthlyQuotaMB, in.QuotaAction
 	return true
 }
 
-// pickPort validates a requested port against the pools, or picks the lowest free one.
-func (s *server) pickPort(ctx context.Context, proto string, requested *int, selfID string) (int, error) {
+// pickPort validates a requested port against the pools, or picks the lowest free one. A tcpudp
+// tunnel needs the port in a TCP pool and a UDP pool, free for both protocols.
+func (s *server) pickPort(ctx context.Context, tunnelType string, requested *int, selfID string) (int, error) {
 	pools, err := s.Store.PortPools(ctx)
 	if err != nil {
 		return 0, err
 	}
-	used, err := s.Store.UsedPorts(ctx, proto)
-	if err != nil {
-		return 0, err
+	var protos []string
+	if store.UsesTCP(tunnelType) {
+		protos = append(protos, store.TypeTCP)
 	}
+	if store.UsesUDP(tunnelType) {
+		protos = append(protos, store.TypeUDP)
+	}
+	used := map[string]map[int]string{}
+	for _, proto := range protos {
+		if used[proto], err = s.Store.UsedPorts(ctx, proto); err != nil {
+			return 0, err
+		}
+	}
+	label := strings.ToUpper(strings.Join(protos, "+"))
 	inPool := func(port int) bool {
-		for _, p := range pools {
-			if p.Proto == proto && port >= p.RangeStart && port <= p.RangeEnd {
-				return true
+		for _, proto := range protos {
+			found := false
+			for _, p := range pools {
+				found = found || (p.Proto == proto && port >= p.RangeStart && port <= p.RangeEnd)
+			}
+			if !found {
+				return false
 			}
 		}
-		return false
+		return true
+	}
+	// free: no other tunnel uses the port for any of the protocols.
+	free := func(port int) bool {
+		for _, proto := range protos {
+			if id, taken := used[proto][port]; taken && id != selfID {
+				return false
+			}
+		}
+		return true
+	}
+	mine := func(port int) bool {
+		for _, proto := range protos {
+			if used[proto][port] != selfID {
+				return false
+			}
+		}
+		return true
 	}
 	if requested != nil && *requested != 0 {
 		port := *requested
-		if id, taken := used[port]; taken && id == selfID {
+		if mine(port) {
 			return port, nil // unchanged: keep it even if its pool was removed
 		}
 		if !inPool(port) {
-			return 0, &rules.Error{Code: "port_not_in_pool", Message: "端口不在任何 " + strings.ToUpper(proto) + " 端口池内"}
+			return 0, &rules.Error{Code: "port_not_in_pool", Message: "端口不在 " + label + " 端口池内"}
 		}
-		if id, taken := used[port]; taken && id != selfID {
+		if !free(port) {
 			return 0, &rules.Error{Code: "port_taken", Message: "端口已被其他隧道占用"}
 		}
 		return port, nil
 	}
 	for _, p := range pools {
-		if p.Proto != proto {
+		if p.Proto != protos[0] {
 			continue
 		}
 		for port := p.RangeStart; port <= p.RangeEnd; port++ {
-			if id, taken := used[port]; !taken || id == selfID {
+			if inPool(port) && free(port) {
 				return port, nil
 			}
 		}
 	}
-	return 0, &rules.Error{Code: "pool_exhausted", Message: "没有可用的 " + strings.ToUpper(proto) + " 端口，请先在端口池中添加范围"}
+	msg := "没有可用的 " + label + " 端口，请先在端口池中添加范围"
+	if len(protos) == 2 {
+		msg = "没有同时空闲的 TCP 和 UDP 端口：TCP+UDP 隧道需要端口同时位于 TCP 与 UDP 端口池内"
+	}
+	return 0, &rules.Error{Code: "pool_exhausted", Message: msg}
 }
 
 type portPoolView struct {

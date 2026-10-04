@@ -394,3 +394,86 @@ func TestAbuseReport(t *testing.T) {
 		t.Fatalf("report flood: %d", resp.StatusCode)
 	}
 }
+
+func TestLoginGateScope(t *testing.T) {
+	p := newPolicyEnv(t)
+	p.admin.must("POST", "/api/v1/users", map[string]any{"username": "bob", "password": "bob-password"}, nil)
+	p.admin.must("POST", "/api/v1/users", map[string]any{"username": "carol", "password": "carol-password"}, nil)
+	tun := p.tunnel("", "family", map[string]any{"accessPolicy": "login"})
+	if tun.LoginAccess != "owner" {
+		t.Fatalf("default scope %q", tun.LoginAccess)
+	}
+	noFollow := func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	login := func(name string) *client {
+		c := p.newClient()
+		c.http.CheckRedirect = noFollow
+		c.must("POST", "/api/v1/auth/login", map[string]string{"username": name, "password": name + "-password"}, nil)
+		return c
+	}
+	// gate walks a visitor through the hand-off as user c and returns the console's status code.
+	gate := func(c *client, v *visitor) int {
+		resp, _ := v.do("GET", "/", nil, true, nil)
+		if resp.StatusCode != 302 {
+			return resp.StatusCode
+		}
+		r, err := c.http.Get(resp.Header.Get("Location"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Body.Close()
+		if r.StatusCode == 302 {
+			cb, _ := url.Parse(r.Header.Get("Location"))
+			v.do("GET", cb.RequestURI(), nil, true, nil)
+		}
+		return r.StatusCode
+	}
+	bob, carol := login("bob"), login("carol")
+	p.admin.http.CheckRedirect = noFollow
+
+	owner := p.visitor("family.t.example.com")
+	if code := gate(p.admin, owner); code != 302 {
+		t.Fatalf("owner refused: %d", code)
+	}
+	if _, body := owner.do("GET", "/", nil, true, nil); body != "backend ok" {
+		t.Fatal("owner not let in")
+	}
+	if code := gate(bob, p.visitor("family.t.example.com")); code != http.StatusForbidden {
+		t.Fatalf("bob let into an owner-only tunnel: %d", code)
+	}
+
+	var bad struct{ Error string }
+	p.admin.do("PUT", "/api/v1/tunnels/"+tun.ID, map[string]any{"userId": p.adminID, "deviceId": p.deviceID, "name": "family", "type": "https",
+		"domainId": p.domainID, "subdomain": "family", "localIp": "127.0.0.1", "localPort": localPort(t, p.backend.URL), "enabled": true,
+		"accessPolicy": "login", "loginAccess": "users", "loginUsers": []string{"nobody"}}, &bad)
+	if bad.Error != "unknown_user" {
+		t.Fatalf("unknown user accepted: %q", bad.Error)
+	}
+	tun = p.tunnel(tun.ID, "family", map[string]any{"accessPolicy": "login", "loginAccess": "users", "loginUsers": []string{"Bob", "bob"}})
+	if tun.LoginAccess != "users" || len(tun.LoginUsers) != 1 || tun.LoginUsers[0] != "bob" {
+		t.Fatalf("scope %+v", tun)
+	}
+	if resp, _ := owner.do("GET", "/", nil, true, nil); resp.StatusCode != 302 {
+		t.Fatalf("changing the scope must sign out earlier visitors: %d", resp.StatusCode)
+	}
+	if code := gate(bob, p.visitor("family.t.example.com")); code != 302 {
+		t.Fatalf("listed user refused: %d", code)
+	}
+	if code := gate(carol, p.visitor("family.t.example.com")); code != http.StatusForbidden {
+		t.Fatalf("unlisted user let in: %d", code)
+	}
+	p.tunnel(tun.ID, "family", map[string]any{"accessPolicy": "login", "loginAccess": "all"})
+	if code := gate(carol, p.visitor("family.t.example.com")); code != 302 {
+		t.Fatalf("all accounts: carol refused: %d", code)
+	}
+	var audit struct{ Events []auditView }
+	p.admin.must("GET", "/api/v1/audit", nil, &audit)
+	denied := 0
+	for _, e := range audit.Events {
+		if e.Action == "tunnel.gate_denied" {
+			denied++
+		}
+	}
+	if denied != 2 {
+		t.Fatalf("gate_denied events: %d", denied)
+	}
+}

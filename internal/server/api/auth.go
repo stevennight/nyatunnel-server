@@ -3,6 +3,7 @@ package api
 import (
 	"crypto/subtle"
 	"errors"
+	"html"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -63,10 +64,7 @@ func (s *server) handleTunnelLogin(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	tunnelID, cb, ret := q.Get("t"), q.Get("cb"), q.Get("r")
 	if !s.Edge.LoginCallbackOK(tunnelID, cb) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.WriteHeader(http.StatusBadRequest)
-		_, _ = w.Write([]byte(`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>链接无效</title></head>` +
-			`<body style="font-family:system-ui,sans-serif;display:grid;place-items:center;min-height:90vh"><main style="text-align:center"><h1>链接无效</h1><p>这个登录链接无效或已过期，请回到原网页重新访问。</p></main></body></html>`))
+		gatePage(w, http.StatusBadRequest, "链接无效", "这个登录链接无效或已过期，请回到原网页重新访问。")
 		return
 	}
 	p, err := s.authenticate(w, r)
@@ -74,9 +72,27 @@ func (s *server) handleTunnelLogin(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/login?next="+url.QueryEscape(r.URL.RequestURI()), http.StatusFound)
 		return
 	}
+	t, err := s.Store.TunnelByID(r.Context(), tunnelID)
+	if err != nil || !t.LoginAllowed(p.user.ID) {
+		s.audit(r, p, "tunnel.gate_denied", tunnelID, "")
+		gatePage(w, http.StatusForbidden, "没有访问权限",
+			"当前账号 "+p.user.Username+" 不在这个隧道的访问名单里。请联系隧道所有人，或退出后换一个账号登录。")
+		return
+	}
 	s.audit(r, p, "tunnel.gate_login", tunnelID, "")
 	target := cb + "?" + url.Values{"token": {s.Edge.IssueLoginToken(tunnelID, p.user.ID)}, "r": {ret}}.Encode()
 	http.Redirect(w, r, target, http.StatusFound)
+}
+
+// gatePage is a minimal page for visitors of login-gated tunnels.
+func gatePage(w http.ResponseWriter, status int, title, text string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(status)
+	_, _ = w.Write([]byte(`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>` +
+		html.EscapeString(title) + `</title></head><body style="font-family:system-ui,sans-serif;display:grid;place-items:center;min-height:90vh">` +
+		`<main style="text-align:center;max-width:32rem;padding:1rem"><h1>` + html.EscapeString(title) + `</h1><p>` + html.EscapeString(text) +
+		`</p><p><a href="/">打开 NyaTunnel 管理台</a></p></main></body></html>`))
 }
 
 // handleSetup creates the first administrator. It needs the setup token from the server log, so

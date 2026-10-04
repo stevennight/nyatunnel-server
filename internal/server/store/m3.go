@@ -25,8 +25,12 @@ type Quota struct {
 	MonthlyTrafficMB int `json:"monthlyTrafficMb"`
 }
 
-// AllowsType reports whether self-service may create a tunnel of type t.
+// AllowsType reports whether self-service may create a tunnel of type t; tcpudp needs both tcp
+// and udp.
 func (q *Quota) AllowsType(t string) bool {
+	if t == TypeTCPUDP {
+		return q.AllowsType(TypeTCP) && q.AllowsType(TypeUDP)
+	}
 	for _, x := range q.Types {
 		if x == t {
 			return true

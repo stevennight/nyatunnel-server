@@ -87,7 +87,7 @@ export type EnrollmentInput = {
   ttlMinutes: number
 }
 
-export type TunnelType = 'https' | 'tcp' | 'udp'
+export type TunnelType = 'https' | 'tcp' | 'udp' | 'tcpudp'
 
 export type TunnelState = 'running' | 'offline' | 'paused' | 'disabled' | 'expired' | 'over_quota' | 'unassigned' | 'error'
 
@@ -97,10 +97,16 @@ export type AccessPolicy = 'public' | 'password' | 'basic' | 'login'
 /** What happens when a tunnel's monthly quota is used up. */
 export type QuotaAction = 'pause' | 'alert'
 
+/** Who may pass a login gate: the owner, the owner plus loginUsers, or every account. */
+export type LoginAccess = 'owner' | 'users' | 'all'
+
 /** Access control and limits, shared by the tunnel view and the input. */
 type TunnelPolicy = {
   accessPolicy: AccessPolicy
   basicUsername: string
+  loginAccess: LoginAccess
+  /** Usernames allowed besides the owner when loginAccess is "users". */
+  loginUsers: string[]
   /** Comma separated IP / CIDR; empty = everyone. */
   ipAllowlist: string
   /** First-visit warning page (HTTPS only). */

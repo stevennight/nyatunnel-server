@@ -385,6 +385,7 @@ export function RequestForm({ initial = {}, onClose }: { initial?: Partial<Reque
               <option value="https">HTTPS（网站）</option>
               <option value="tcp">TCP</option>
               <option value="udp">UDP</option>
+              <option value="tcpudp">TCP+UDP（同一端口）</option>
             </select>
           </div>
           <div className="row">

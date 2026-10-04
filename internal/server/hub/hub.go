@@ -205,7 +205,11 @@ func (h *Hub) PublicURL(t *store.Tunnel) string {
 	case t.Host != nil:
 		return "https://" + *t.Host
 	case t.RemotePort != nil:
-		return t.Type + "://" + net.JoinHostPort(h.opt.TCPHost, strconv.Itoa(*t.RemotePort))
+		scheme := t.Type
+		if t.Type == store.TypeTCPUDP {
+			scheme = "tcp+udp"
+		}
+		return scheme + "://" + net.JoinHostPort(h.opt.TCPHost, strconv.Itoa(*t.RemotePort))
 	}
 	return ""
 }
