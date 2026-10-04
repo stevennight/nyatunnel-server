@@ -65,7 +65,8 @@ body {
   background: var(--bg);
   color: var(--text);
   font: 14px/1.55 -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  overflow-x: hidden;
+  /* clip, not hidden: hidden turns body into a scroll container, and then the sticky sidebar and top bar stick to body (which never scrolls) instead of the viewport. */
+  overflow-x: clip;
 }
 code,
 .mono {
@@ -249,11 +250,16 @@ ul {
   margin: 0;
   accent-color: var(--brand);
 }
+.chk > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .inline-chk {
   margin-bottom: 0;
   white-space: nowrap;
 }
 .notice {
+  overflow-wrap: anywhere;
   border-radius: 8px;
   padding: 8px 12px;
   font-size: 13px;
@@ -355,12 +361,10 @@ ul {
   align-items: center;
   gap: 8px;
 }
-.logo i {
-  width: 22px;
-  height: 22px;
-  border-radius: 6px;
-  background: linear-gradient(135deg, var(--brand), #c084fc);
-  display: inline-block;
+.logo img {
+  width: 24px;
+  height: 24px;
+  display: block;
   flex: none;
 }
 
@@ -377,12 +381,21 @@ ul {
   position: sticky;
   top: 0;
   height: 100vh;
-  overflow-y: auto;
   display: flex;
   flex-direction: column;
 }
+/* Only the menu scrolls; the logo and the account footer stay in place. */
+.side-nav {
+  scrollbar-width: thin;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 0 -10px;
+  padding: 0 10px;
+}
 .side .logo {
   padding: 4px 10px 14px;
+  flex: none;
 }
 .side .logo span {
   flex: 1;
@@ -412,7 +425,7 @@ ul {
   letter-spacing: 0.06em;
 }
 .side-foot {
-  margin-top: auto;
+  flex: none;
   padding: 14px 10px 0;
   border-top: 1px solid var(--line);
 }
@@ -609,6 +622,13 @@ td.clip,
 td.clip.wide {
   max-width: 360px;
 }
+/* A table cell for longer notes (DNS instructions, check errors) that wraps instead of clipping. */
+td.cell-notes {
+  min-width: 220px;
+  max-width: 360px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 
 /* --- forms in dialogs --- */
 .fs {
@@ -680,6 +700,9 @@ td.clip.wide {
   max-width: 100%;
   padding: 18px 20px;
   border: 1px solid var(--line);
+}
+.modal:focus {
+  outline: none;
 }
 .modal.wide {
   width: 640px;
@@ -887,6 +910,9 @@ textarea.inp {
 }
 .legend i.out {
   background: #c084fc;
+}
+.legend-peak {
+  margin-left: 14px;
 }
 
 @media (max-width: 1100px) {

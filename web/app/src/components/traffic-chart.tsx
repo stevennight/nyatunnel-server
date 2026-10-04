@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query'
+import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { describeError, getTraffic } from '../api'
 import { bytes, date, dateTime } from '../format'
@@ -10,18 +10,26 @@ const HOUR = 3_600_000
 type Bucket = { start: number; bytesIn: number; bytesOut: number; conns: number }
 
 /**
- * Spreads a sparse hourly series over fixed buckets ending at the current hour: hourly up to two
- * days, daily (24-hour buckets) beyond that.
+ * Spreads a sparse hourly series over fixed buckets ending now: hourly up to two days (the last
+ * bucket is the current hour), local calendar days beyond that (the last bucket is today).
  */
 export function bucketize(series: TrafficPoint[], hours: number, now = Date.now()): Bucket[] {
-  const size = hours > 48 ? 24 : 1
-  const count = Math.max(1, Math.ceil(hours / size))
-  const last = Math.floor(now / HOUR) * HOUR // start of the current hour
-  const first = last - (count * size - 1) * HOUR
-  const out: Bucket[] = Array.from({ length: count }, (_, i) => ({ start: first + i * size * HOUR, bytesIn: 0, bytesOut: 0, conns: 0 }))
+  let starts: number[]
+  if (hours > 48) {
+    const today = new Date(now)
+    const days = Math.ceil(hours / 24)
+    // Built from the calendar rather than 24-hour steps so a DST change cannot shift the days.
+    starts = Array.from({ length: days }, (_, i) => new Date(today.getFullYear(), today.getMonth(), today.getDate() - (days - 1 - i)).getTime())
+  } else {
+    const last = Math.floor(now / HOUR) * HOUR // start of the current hour
+    const count = Math.max(1, hours)
+    starts = Array.from({ length: count }, (_, i) => last - (count - 1 - i) * HOUR)
+  }
+  const out: Bucket[] = starts.map((start) => ({ start, bytesIn: 0, bytesOut: 0, conns: 0 }))
   for (const p of series) {
-    const i = Math.floor((p.hour - first) / (size * HOUR))
-    if (i < 0 || i >= count) continue
+    if (p.hour < starts[0]) continue
+    let i = starts.length - 1
+    while (starts[i] > p.hour) i--
     out[i].bytesIn += p.bytesIn
     out[i].bytesOut += p.bytesOut
     out[i].conns += p.conns
@@ -71,7 +79,10 @@ export function TrafficChart({ series, hours, label = '流量图' }: { series: T
       <figcaption className="chart-foot hint">
         <span>{daily ? date(buckets[0].start) : hourLabel(buckets[0].start)}</span>
         <span className="legend">
-          <i className="in" /> 入站 <i className="out" /> 出站 · 峰值 {total > 0 ? bytes(max) : '0 B'}/{daily ? '天' : '小时'}
+          <i className="in" /> 入站 <i className="out" /> 出站
+          <span className="legend-peak">
+            单{daily ? '日' : '小时'}峰值（入 + 出）{total > 0 ? bytes(max) : '0 B'}
+          </span>
         </span>
         <span>{daily ? date(buckets[buckets.length - 1].start) : '现在'}</span>
       </figcaption>
@@ -88,9 +99,15 @@ export const TRAFFIC_RANGES = [
 /** Traffic of one tunnel over 24 h / 7 d / 30 d. */
 export function TrafficDialog({ tunnel, onClose }: { tunnel: Tunnel; onClose: () => void }) {
   const [hours, setHours] = useState(24)
-  const traffic = useQuery({ queryKey: ['traffic', tunnel.id, hours], queryFn: () => getTraffic({ tunnelId: tunnel.id, hours }) })
-  const total = (traffic.data?.series ?? []).reduce((n, p) => n + p.bytesIn + p.bytesOut, 0)
-  const conns = (traffic.data?.series ?? []).reduce((n, p) => n + p.conns, 0)
+  const traffic = useQuery({
+    queryKey: ['traffic', tunnel.id, hours],
+    queryFn: () => getTraffic({ tunnelId: tunnel.id, hours }),
+    placeholderData: keepPreviousData, // keep the old chart while another range loads
+  })
+  // Sum what the chart shows, so 合计 always matches the bars.
+  const buckets = traffic.data ? bucketize(traffic.data.series, hours) : []
+  const total = buckets.reduce((n, b) => n + b.bytesIn + b.bytesOut, 0)
+  const conns = buckets.reduce((n, b) => n + b.conns, 0)
   return (
     <Modal title={`流量 · ${tunnel.name}`} onClose={onClose} wide>
       <div className="inline wrap mb">

@@ -6,13 +6,15 @@ export const POLL_MS = 30_000
 
 /**
  * A query client that reacts to session-level errors from any request:
- * 401 → the session is gone, re-run bootstrap (shows the login screen);
+ * 401 → the session is gone, forget cached data and re-run bootstrap (shows the login screen);
  * 403 totp_setup_required → TOTP became mandatory, reload /me (shows only the security page).
  */
 export function createQueryClient() {
   const onError = (err: unknown) => {
     if (!(err instanceof ApiError)) return
     if (err.status === 401 && err.code === 'unauthorized') {
+      // Same as logging out: drop the old account's data so the next login never shows it.
+      client.removeQueries({ predicate: (q) => q.queryKey[0] !== 'bootstrap' })
       void client.invalidateQueries({ queryKey: ['bootstrap'] })
     } else if (err.code === 'totp_setup_required') {
       void client.invalidateQueries({ queryKey: ['me'] })

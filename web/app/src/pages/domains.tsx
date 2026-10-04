@@ -19,7 +19,7 @@ export function DomainsPage() {
 
   return (
     <>
-      {isAdmin && <RootDomains roots={roots} loading={domains.isPending} onDelete={setDeleting} />}
+      {isAdmin && <RootDomains roots={roots} loading={domains.isPending} loaded={!!domains.data} onDelete={setDeleting} />}
       {domains.isError && <Notice tone="bad">{describeError(domains.error)}</Notice>}
       <CustomDomains customs={customs} publicIps={domains.data?.publicIps ?? []} loading={domains.isPending} loaded={!!domains.data} onDelete={setDeleting} />
       {deleting && <DeleteDomainDialog domain={deleting} onClose={() => setDeleting(null)} />}
@@ -27,7 +27,7 @@ export function DomainsPage() {
   )
 }
 
-function RootDomains({ roots, loading, onDelete }: { roots: Domain[]; loading: boolean; onDelete: (d: Domain) => void }) {
+function RootDomains({ roots, loading, loaded, onDelete }: { roots: Domain[]; loading: boolean; loaded: boolean; onDelete: (d: Domain) => void }) {
   const client = useQueryClient()
   const { bootstrap } = useSession()
   const [name, setName] = useState('')
@@ -91,7 +91,7 @@ function RootDomains({ roots, loading, onDelete }: { roots: Domain[]; loading: b
 
       {loading ? (
         <Loading />
-      ) : roots.length === 0 ? (
+      ) : !loaded ? null : roots.length === 0 ? (
         <Empty>还没有根域名。添加后才能创建使用子域名的 HTTPS 隧道。</Empty>
       ) : (
         <div className="tbl">
@@ -161,6 +161,7 @@ function CustomDomains({
   const [name, setName] = useState('')
   const [owner, setOwner] = useState('')
   const [checked, setChecked] = useState<string | null>(null)
+  const [disabling, setDisabling] = useState<Domain | null>(null)
   const refresh = () => client.invalidateQueries({ queryKey: ['domains'] })
 
   const create = useMutation({
@@ -261,12 +262,12 @@ function CustomDomains({
                     <td>
                       <Tag tone={st.tone}>{st.label}</Tag>
                     </td>
-                    <td className="clip wide" title={d.checkError || undefined}>
+                    <td className="cell-notes">
                       {d.checkedAt ? <span title={dateTime(d.checkedAt)}>{ago(d.checkedAt)}</span> : <span className="hint">未检查</span>}
                       {d.checkError ? (
-                        <div className="hint warn-text clip wide">{d.checkError}</div>
+                        <div className="hint warn-text">{d.checkError}</div>
                       ) : d.status === 'dns' ? (
-                        <div className="hint clip wide">{dnsInstruction(d.name, publicIps)}</div>
+                        <div className="hint">{dnsInstruction(d.name, publicIps)}</div>
                       ) : d.status === 'pending' ? (
                         <div className="hint">等待管理员批准</div>
                       ) : null}
@@ -279,7 +280,7 @@ function CustomDomains({
                           </button>
                         )}
                         {isAdmin && (d.status === 'dns' || d.status === 'active') && (
-                          <button type="button" className="btn sm" disabled={action.isPending} onClick={() => action.mutate({ d, act: 'disable' })}>
+                          <button type="button" className="btn sm" disabled={action.isPending} onClick={() => setDisabling(d)}>
                             停用
                           </button>
                         )}
@@ -304,6 +305,21 @@ function CustomDomains({
             </tbody>
           </table>
         </div>
+      )}
+      {disabling && (
+        <ConfirmDialog
+          title="停用自定义域名"
+          confirmLabel="停用"
+          danger
+          busy={action.isPending}
+          error={action.isError ? describeError(action.error) : null}
+          onConfirm={() => action.mutate({ d: disabling, act: 'disable' }, { onSuccess: () => setDisabling(null) })}
+          onClose={() => setDisabling(null)}
+        >
+          确定停用 <b className="mono">{disabling.name}</b>？
+          {disabling.tunnelCount > 0 ? `使用它的 ${disabling.tunnelCount} 条隧道会立即无法访问，` : ''}
+          之后可以随时重新启用。
+        </ConfirmDialog>
       )}
     </section>
   )

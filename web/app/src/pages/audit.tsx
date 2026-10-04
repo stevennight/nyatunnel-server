@@ -33,7 +33,7 @@ export function AuditPage() {
         <select className="inp auto" aria-label="筛选事件" value={filter} onChange={(e) => setFilter(e.target.value as Filter)}>
           <option value="all">全部事件</option>
           <option value="denied">仅失败、拒绝与举报</option>
-          <option value="admin">管理操作</option>
+          <option value="admin">账号操作（登录除外）</option>
           <option value="device">设备与注册</option>
         </select>
         <button type="button" className="btn" onClick={() => audit.refetch()} disabled={audit.isFetching}>

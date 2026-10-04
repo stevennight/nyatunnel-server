@@ -581,5 +581,9 @@ describe('traffic chart', () => {
     expect(week).toHaveLength(7)
     expect(week[6].bytesIn).toBe(11)
     expect(week[5].bytesIn).toBe(100)
+    // Days are local calendar days: the last bucket is today, starting at local midnight.
+    const midnight = new Date(now)
+    midnight.setHours(0, 0, 0, 0)
+    expect(week[6].start).toBe(midnight.getTime())
   })
 })

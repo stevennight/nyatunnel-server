@@ -65,7 +65,7 @@ export function EnrollDialog({
   const toggleTunnel = (id: string, on: boolean) => setTunnelIds((ids) => (on ? [...ids, id] : ids.filter((x) => x !== id)))
 
   return (
-    <Modal title="邀请新设备" onClose={onClose} wide>
+    <Modal title="邀请新设备" onClose={onClose} wide dismissable={!result}>
       {result ? (
         <EnrollmentResult enrollment={result} onAgain={() => setResult(null)} onClose={onClose} />
       ) : (

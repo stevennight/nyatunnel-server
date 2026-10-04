@@ -8,28 +8,45 @@ import type { TunnelState } from '../types'
 
 const openModals: symbol[] = []
 
-/** A modal dialog: closes on Escape and on a click outside the panel. */
+/**
+ * A modal dialog. Escape closes it unless `dismissable` is false (for content that cannot be shown
+ * again, such as a one-time enrollment code). A click outside the panel never closes it: most
+ * dialogs are forms, and a stray click must not throw away what was typed.
+ */
 export function Modal({
   title,
   onClose,
   children,
   wide = false,
+  dismissable = true,
 }: {
   title: string
   onClose: () => void
   children: ReactNode
   wide?: boolean
+  dismissable?: boolean
 }) {
   const titleId = useId()
+  const panel = useRef<HTMLDivElement>(null)
   const close = useRef(onClose)
   close.current = onClose
+  const canDismiss = useRef(dismissable)
+  canDismiss.current = dismissable
+  useEffect(() => {
+    // Start keyboard focus inside the dialog: an autoFocus child wins, then the first field.
+    const el = panel.current
+    if (el && !el.contains(document.activeElement)) {
+      const field = el.querySelector<HTMLElement>('input:not([type=hidden]):not([disabled]):not([readonly]), select:not([disabled]), textarea:not([disabled])')
+      ;(field ?? el).focus()
+    }
+  }, [])
   useEffect(() => {
     // Only the topmost dialog reacts to Escape (a confirmation may sit on top of a form).
     const id = Symbol('modal')
     openModals.push(id)
     document.body.style.overflow = 'hidden' // the dialog scrolls on its own
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && openModals[openModals.length - 1] === id) close.current()
+      if (e.key === 'Escape' && canDismiss.current && openModals[openModals.length - 1] === id) close.current()
     }
     window.addEventListener('keydown', onKey)
     return () => {
@@ -40,8 +57,8 @@ export function Modal({
   }, [])
 
   return (
-    <div className="mask" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className={`modal${wide ? ' wide' : ''}`} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+    <div className="mask">
+      <div ref={panel} tabIndex={-1} className={`modal${wide ? ' wide' : ''}`} role="dialog" aria-modal="true" aria-labelledby={titleId}>
         <h3 id={titleId}>{title}</h3>
         {children}
       </div>
@@ -54,6 +71,7 @@ export function ConfirmDialog({
   title,
   children,
   confirmLabel,
+  cancelLabel = '取消',
   danger = false,
   busy = false,
   error,
@@ -63,6 +81,7 @@ export function ConfirmDialog({
   title: string
   children: ReactNode
   confirmLabel: string
+  cancelLabel?: string
   danger?: boolean
   busy?: boolean
   error?: string | null
@@ -74,10 +93,11 @@ export function ConfirmDialog({
       <div className="confirm-body">{children}</div>
       {error && <Notice tone="bad">{error}</Notice>}
       <div className="actions">
-        <button type="button" className="btn" onClick={onClose}>
-          取消
+        {/* Enter confirms a harmless action; for a dangerous one it only cancels. */}
+        <button type="button" className="btn" onClick={onClose} autoFocus={danger}>
+          {cancelLabel}
         </button>
-        <button type="button" className={`btn ${danger ? 'danger-solid' : 'primary'}`} disabled={busy} onClick={onConfirm}>
+        <button type="button" className={`btn ${danger ? 'danger-solid' : 'primary'}`} disabled={busy} onClick={onConfirm} autoFocus={!danger}>
           {confirmLabel}
         </button>
       </div>
@@ -115,21 +135,21 @@ export function TunnelStateTag({ state, error }: { state: TunnelState; error?: s
 }
 
 export function CopyButton({ text, label = '复制' }: { text: string; label?: string }) {
-  const [done, setDone] = useState(false)
+  const [done, setDone] = useState<'ok' | 'failed' | null>(null)
   useEffect(() => {
     if (!done) return
-    const t = setTimeout(() => setDone(false), 1500)
+    const t = setTimeout(() => setDone(null), done === 'ok' ? 1500 : 3000)
     return () => clearTimeout(t)
   }, [done])
   return (
     <button
       type="button"
-      className="btn"
+      className={`btn${done === 'failed' ? ' danger' : ''}`}
       aria-label={`${label}${text.length < 40 ? ` ${text}` : ''}`}
-      onClick={async () => setDone(await copyText(text))}
+      onClick={async () => setDone((await copyText(text)) ? 'ok' : 'failed')}
     >
-      {done ? <Check size={14} /> : <Copy size={14} />}
-      {done ? '已复制' : label}
+      {done === 'ok' ? <Check size={14} /> : <Copy size={14} />}
+      {done === 'ok' ? '已复制' : done === 'failed' ? '复制失败，请手动选中复制' : label}
     </button>
   )
 }

@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { Download } from 'lucide-react'
 import { changePassword, describeError, disableTotp, enableTotp, listSessions, regenerateRecoveryCodes, revokeSession, setupTotp } from '../api'
@@ -110,6 +110,7 @@ function SessionsCard() {
 }
 
 function PasswordCard() {
+  const client = useQueryClient()
   const [current, setCurrent] = useState('')
   const [next, setNext] = useState('')
   const [confirm, setConfirm] = useState('')
@@ -123,6 +124,8 @@ function PasswordCard() {
       setNext('')
       setConfirm('')
       setDone(true)
+      // The other sessions were signed out; don't keep listing them.
+      void client.invalidateQueries({ queryKey: ['sessions'] })
     },
     onError: (e) => setProblem(describeError(e)),
   })
@@ -176,6 +179,16 @@ function TotpCard() {
   const [done, setDone] = useState<string | null>(null)
 
   const refreshMe = () => client.invalidateQueries({ queryKey: ['me'] })
+
+  // Leaving the page while the recovery codes are shown must not leave /me saying "未开启".
+  const showingCodes = useRef(false)
+  showingCodes.current = codes !== null
+  useEffect(
+    () => () => {
+      if (showingCodes.current) void client.invalidateQueries({ queryKey: ['me'] })
+    },
+    [client],
+  )
 
   const start = useMutation({
     mutationFn: setupTotp,
@@ -341,7 +354,14 @@ function TotpCard() {
             <button type="submit" className="btn primary" disabled={enable.isPending}>
               启用
             </button>
-            <button type="button" className="btn" onClick={() => setPending(null)}>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => {
+                setPending(null)
+                setProblem(null)
+              }}
+            >
               取消
             </button>
           </div>

@@ -47,6 +47,32 @@ func (s *Store) AuditLogs(ctx context.Context, beforeID int64, limit int) ([]*Au
 	return out, rows.Err()
 }
 
+// refusalWhere matches failed logins and device auth, denied requests and invalid enrollment codes.
+const refusalWhere = `at >= ? AND (action LIKE '%\_failed' ESCAPE '\' OR action LIKE '%\_denied' ESCAPE '\' OR action LIKE '%invalid\_code' ESCAPE '\')`
+
+// Refusals counts the refusals since `since` and returns the newest `limit` of them.
+func (s *Store) Refusals(ctx context.Context, since int64, limit int) ([]*AuditEvent, int, error) {
+	var n int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM audit_logs WHERE `+refusalWhere, since).Scan(&n); err != nil {
+		return nil, 0, err
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id, at, actor_type, actor_id, actor_name, action, target, detail, ip FROM audit_logs
+		WHERE `+refusalWhere+` ORDER BY id DESC LIMIT ?`, since, limit)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	out := []*AuditEvent{}
+	for rows.Next() {
+		var e AuditEvent
+		if err := rows.Scan(&e.ID, &e.At, &e.ActorType, &e.ActorID, &e.ActorName, &e.Action, &e.Target, &e.Detail, &e.IP); err != nil {
+			return nil, 0, err
+		}
+		out = append(out, &e)
+	}
+	return out, n, rows.Err()
+}
+
 // DeleteAuditBefore is retention housekeeping.
 func (s *Store) DeleteAuditBefore(ctx context.Context, before int64) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM audit_logs WHERE at < ?`, before)

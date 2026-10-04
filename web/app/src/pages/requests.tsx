@@ -126,7 +126,7 @@ function RequestCard({
 }) {
   const st = requestStatuses[r.status] ?? { label: r.status, tone: 'n' as const }
   const t = tunnelTypes[r.payload.type] ?? { label: r.payload.type, tone: 'n' as const }
-  const who = r.deviceName ? `${admin ? `${r.username} · ` : ''}${r.deviceName}` : admin ? r.username : '后台'
+  const who = r.deviceName ? `${admin ? `${r.username} · ` : ''}${r.deviceName}` : admin ? r.username : '我'
   return (
     <article className="card" aria-label={`申请 ${r.payload.name || requestedEntry(r, domains)}`}>
       <div className="ttl tight">

@@ -14,7 +14,7 @@ function AuthCard({ title, hint, serverName, children }: { title: string; hint: 
     <div className="auth-wrap">
       <div className="auth-card">
         <div className="logo">
-          <i />
+          <img src="/logo.svg" alt="" />
           <span>{serverName || 'NyaTunnel'}</span>
         </div>
         <h1>{title}</h1>

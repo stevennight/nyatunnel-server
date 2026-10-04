@@ -16,7 +16,7 @@ export function QrCode({ text, label, size = 160 }: { text: string; label: strin
     }
     return { n: count, path: d }
   }, [text])
-  const quiet = 3 // modules of white border, as the QR specification asks
+  const quiet = 4 // modules of white border, as the QR specification asks
   const box = n + quiet * 2
   return (
     <svg

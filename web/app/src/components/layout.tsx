@@ -144,6 +144,12 @@ function Console({ bootstrap }: { bootstrap: Bootstrap }) {
   const pathname = useRouterState({ select: (s) => s.location.pathname })
 
   useEffect(() => setDrawer(false), [pathname])
+  useEffect(() => {
+    if (!drawer) return
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setDrawer(false)
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [drawer])
 
   const signOut = useMutation({
     mutationFn: logout,
@@ -186,28 +192,30 @@ function Console({ bootstrap }: { bootstrap: Bootstrap }) {
       <div className={`app${drawer ? ' drawer-open' : ''}`}>
         <aside className="side" aria-label="主导航">
           <div className="logo">
-            <i />
+            <img src="/logo.svg" alt="" />
             <span>NyaTunnel</span>
             <button type="button" className="icon-btn only-mobile" aria-label="关闭菜单" onClick={() => setDrawer(false)}>
               <X size={18} />
             </button>
           </div>
-          {nav.map((group, i) => (
-            <nav key={group.label ?? i} aria-label={group.label ?? '常用'}>
-              {group.label && <div className="sec">{group.label}</div>}
-              {group.items.map(({ to, label, icon: Icon, badge }) => (
-                <Link key={to} to={to} className="it" activeProps={{ className: 'it on', 'aria-current': 'page' }}>
-                  <Icon size={16} aria-hidden="true" />
-                  <span>{label}</span>
-                  {badge && badges[badge] > 0 && (
-                    <span className="badge" aria-label={`${badges[badge]} 条待处理`}>
-                      {badges[badge]}
-                    </span>
-                  )}
-                </Link>
-              ))}
-            </nav>
-          ))}
+          <div className="side-nav">
+            {nav.map((group, i) => (
+              <nav key={group.label ?? i} aria-label={group.label ?? '常用'}>
+                {group.label && <div className="sec">{group.label}</div>}
+                {group.items.map(({ to, label, icon: Icon, badge }) => (
+                  <Link key={to} to={to} className="it" onClick={() => setDrawer(false)} activeProps={{ className: 'it on', 'aria-current': 'page' }}>
+                    <Icon size={16} aria-hidden="true" />
+                    <span>{label}</span>
+                    {badge && badges[badge] > 0 && (
+                      <span className="badge" aria-label={`${badges[badge]} 条待处理`}>
+                        {badges[badge]}
+                      </span>
+                    )}
+                  </Link>
+                ))}
+              </nav>
+            ))}
+          </div>
           <div className="side-foot hint">
             {session.user.username} · {roleLabel(session.user.role)}
             <br />v{bootstrap.version.replace(/^v/, '')}

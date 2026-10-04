@@ -176,3 +176,22 @@ func TestRecoveryCodesAreSingleUse(t *testing.T) {
 		t.Fatalf("user %+v", u)
 	}
 }
+
+func TestRefusalsCountsTheWholeWindow(t *testing.T) {
+	s, ctx := openTest(t), context.Background()
+	s.Audit(ctx, AuditEvent{At: 50, Action: "auth.login_failed"}) // before the window
+	for i := 0; i < 15; i++ {
+		s.Audit(ctx, AuditEvent{At: int64(100 + i), Action: "auth.login_failed"})
+	}
+	s.Audit(ctx, AuditEvent{At: 200, Action: "enroll.invalid_code"})
+	s.Audit(ctx, AuditEvent{At: 201, Action: "tunnel.gate_denied"})
+	s.Audit(ctx, AuditEvent{At: 202, Action: "tunnel.create"})
+	s.Audit(ctx, AuditEvent{At: 203, Action: "auth.loginxfailed"}) // "_" must not act as a wildcard
+	got, n, err := s.Refusals(ctx, 100, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 17 || len(got) != 10 || got[0].Action != "tunnel.gate_denied" {
+		t.Fatalf("n=%d len=%d first=%+v", n, len(got), got[0])
+	}
+}

@@ -112,8 +112,14 @@ func (s *server) handleTraffic(w http.ResponseWriter, r *http.Request, p *princi
 		}
 		userID = p.user.ID
 	}
-	since := s.now().Add(-time.Duration(hours) * time.Hour).Truncate(time.Hour).UnixMilli()
-	series, err := s.Store.TrafficSeries(r.Context(), tunnelID, userID, since)
+	// Up to two days the console draws one bar per hour ending with the current one, so send
+	// exactly those hours. Longer ranges are drawn as local calendar days; the first of those can
+	// start up to a day before now-hours+1h, so send the full window and let the console clip it.
+	since := s.now().Truncate(time.Hour).Add(-time.Duration(hours-1) * time.Hour)
+	if hours > 48 {
+		since = s.now().Add(-time.Duration(hours) * time.Hour).Truncate(time.Hour)
+	}
+	series, err := s.Store.TrafficSeries(r.Context(), tunnelID, userID, since.UnixMilli())
 	if err != nil {
 		s.fail(w, "traffic", err)
 		return
@@ -131,7 +137,6 @@ func (s *server) handleDashboard(w http.ResponseWriter, r *http.Request, p *prin
 	}
 	devices, _ := s.Store.Devices(ctx, "")
 	tunnels, _ := s.Store.Tunnels(ctx, "")
-	events, _ := s.Store.AuditLogs(ctx, 0, 200)
 
 	active := 0
 	for _, d := range devices {
@@ -149,23 +154,16 @@ func (s *server) handleDashboard(w http.ResponseWriter, r *http.Request, p *prin
 		}
 	}
 	// Recent refusals are the first sign of someone probing or misusing the system.
-	dayAgo := s.now().Add(-24 * time.Hour).UnixMilli()
+	// Counted in the database, so a burst of failures cannot hide behind a fixed page of events.
+	events, deniedCount, _ := s.Store.Refusals(ctx, s.now().Add(-24*time.Hour).UnixMilli(), 10)
 	denied := []auditView{}
-	deniedCount := 0
 	for _, e := range events {
-		if e.At < dayAgo {
-			break
-		}
-		if strings.HasSuffix(e.Action, "_failed") || strings.HasSuffix(e.Action, "_denied") || strings.HasSuffix(e.Action, "invalid_code") {
-			deniedCount++
-			if len(denied) < 10 {
-				denied = append(denied, auditView{ID: e.ID, At: e.At, ActorType: e.ActorType, ActorID: e.ActorID, ActorName: e.ActorName,
-					Action: e.Action, Target: e.Target, Detail: e.Detail, IP: e.IP})
-			}
-		}
+		denied = append(denied, auditView{ID: e.ID, At: e.At, ActorType: e.ActorType, ActorID: e.ActorID, ActorName: e.ActorName,
+			Action: e.Action, Target: e.Target, Detail: e.Detail, IP: e.IP})
 	}
 	tcp, udp := s.Edge.ListenerPorts()
-	series, _ := s.Store.TrafficSeries(ctx, "", "", s.now().Add(-24*time.Hour).Truncate(time.Hour).UnixMilli())
+	// The current hour and the 23 before it: the same 24 bars the dashboard chart draws.
+	series, _ := s.Store.TrafficSeries(ctx, "", "", s.now().Truncate(time.Hour).Add(-23*time.Hour).UnixMilli())
 	var traffic24h int64
 	for _, p := range series {
 		traffic24h += p.BytesIn + p.BytesOut

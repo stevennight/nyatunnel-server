@@ -212,6 +212,7 @@ function CancelInvitationDialog({ enrollment, onClose }: { enrollment: PendingEn
     <ConfirmDialog
       title="取消邀请"
       confirmLabel="取消邀请"
+      cancelLabel="保留"
       danger
       busy={mutation.isPending}
       error={mutation.isError ? describeError(mutation.error) : null}
