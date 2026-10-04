@@ -170,6 +170,7 @@ export function TunnelsPage() {
                   </td>
                   <td>
                     <TunnelStateTag state={t.state} error={t.stateError} />
+                    {t.state === 'unconfirmed' && <div className="hint">需在设备上确认后才会接通</div>}
                     {t.state === 'error' && t.stateError && (
                       <div className="hint bad-text clip" title={t.stateError}>
                         {t.stateError}

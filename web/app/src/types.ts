@@ -89,7 +89,16 @@ export type EnrollmentInput = {
 
 export type TunnelType = 'https' | 'tcp' | 'udp' | 'tcpudp'
 
-export type TunnelState = 'running' | 'offline' | 'paused' | 'disabled' | 'expired' | 'over_quota' | 'unassigned' | 'error'
+export type TunnelState =
+  | 'running'
+  | 'offline'
+  | 'paused'
+  | 'disabled'
+  | 'expired'
+  | 'over_quota'
+  | 'unassigned'
+  | 'unconfirmed'
+  | 'error'
 
 /** Who may open an HTTPS tunnel; anything but public is HTTPS-only. */
 export type AccessPolicy = 'public' | 'password' | 'basic' | 'login'

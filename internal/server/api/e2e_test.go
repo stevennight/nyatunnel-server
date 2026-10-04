@@ -166,6 +166,8 @@ type fakeDevice struct {
 	cfgs   chan tunnelproto.Config
 	result chan tunnelproto.Result
 	closed chan error
+	// unconfirmed tunnels are refused like a device whose owner has not confirmed them.
+	unconfirmed map[string]bool
 }
 
 func (e *testEnv) connect(deviceID string, priv ed25519.PrivateKey) (*fakeDevice, error) {
@@ -186,7 +188,7 @@ func (e *testEnv) connect(deviceID string, priv ed25519.PrivateKey) (*fakeDevice
 		return nil, err
 	}
 	d := &fakeDevice{t: e.t, ws: ws, ctl: tunnelproto.NewControl(stream), cfgs: make(chan tunnelproto.Config, 8),
-		result: make(chan tunnelproto.Result, 8), closed: make(chan error, 1)}
+		result: make(chan tunnelproto.Result, 8), closed: make(chan error, 1), unconfirmed: map[string]bool{}}
 	go func() {
 		for {
 			m, err := d.ctl.Recv()
@@ -234,9 +236,14 @@ func (d *fakeDevice) serve(s net.Conn) {
 			target = &d.cfg.Tunnels[i]
 		}
 	}
+	unconfirmed := d.unconfirmed[h.TunnelID]
 	d.mu.Unlock()
 	if target == nil {
 		tunnelproto.WriteStreamReply(s, tunnelproto.ReplyUnknownTunnel)
+		return
+	}
+	if unconfirmed {
+		tunnelproto.WriteStreamReply(s, tunnelproto.ReplyUnconfirmed)
 		return
 	}
 	local, err := net.Dial(h.Proto, net.JoinHostPort(target.LocalIP, strconv.Itoa(target.LocalPort)))
@@ -427,7 +434,12 @@ func TestEndToEnd(t *testing.T) {
 		t.Fatalf("config %+v", cfg)
 	}
 
-	// HTTPS tunnel through the ingress, as Caddy would forward it.
+	// A tunnel the device owner has not confirmed yet: visitors get a 503 that says so, and the
+	// console shows the state the device reported.
+	dev.mu.Lock()
+	dev.unconfirmed[webTunnel.ID] = true
+	dev.mu.Unlock()
+	dev.ctl.Send(tunnelproto.TypeStatus, "", tunnelproto.Status{TunnelID: webTunnel.ID, State: tunnelproto.StateUnconfirmed})
 	req, _ := http.NewRequest("GET", env.ingress.URL+"/", nil)
 	req.Host = "alice-web.t.example.com"
 	req.Header.Set("X-Forwarded-For", "198.51.100.7")
@@ -436,6 +448,39 @@ func TestEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(string(body), "等待设备确认") {
+		t.Fatalf("unconfirmed tunnel: %d %s", resp.StatusCode, body)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var got struct{ Tunnels []tunnelView }
+		aliceC.must("GET", "/api/v1/tunnels", nil, &got)
+		state := ""
+		for _, v := range got.Tunnels {
+			if v.ID == webTunnel.ID {
+				state = v.State
+			}
+		}
+		if state == "unconfirmed" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("console state %q, want unconfirmed", state)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	dev.mu.Lock()
+	delete(dev.unconfirmed, webTunnel.ID)
+	dev.mu.Unlock()
+	dev.ctl.Send(tunnelproto.TypeStatus, "", tunnelproto.Status{TunnelID: webTunnel.ID, State: tunnelproto.StateRunning})
+
+	// HTTPS tunnel through the ingress, as Caddy would forward it.
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ = io.ReadAll(resp.Body)
 	resp.Body.Close()
 	if resp.StatusCode != 200 || string(body) != "hello alice-web.t.example.com from 198.51.100.7" {
 		t.Fatalf("ingress: %d %s", resp.StatusCode, body)

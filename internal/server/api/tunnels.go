@@ -55,7 +55,8 @@ type tunnelView struct {
 	LoginAccess string   `json:"loginAccess"`
 	LoginUsers  []string `json:"loginUsers"`
 	ActiveConns int64    `json:"activeConns"`
-	// State is running, offline, paused, disabled, expired, over_quota, unassigned or error.
+	// State is running, offline, paused, disabled, expired, over_quota, unassigned, unconfirmed
+	// (waiting for the device owner to confirm it on the device) or error.
 	State      string `json:"state"`
 	StateError string `json:"stateError,omitempty"`
 }
@@ -95,8 +96,11 @@ func (s *server) viewTunnel(t *store.Tunnel, users, devices map[string]string, m
 		v.State = "offline"
 		if online {
 			v.State = "running"
-			if st, ok := info.Status[t.ID]; ok && st.State == tunnelproto.StateError {
+			switch st, ok := info.Status[t.ID]; {
+			case ok && st.State == tunnelproto.StateError:
 				v.State, v.StateError = "error", st.Error
+			case ok && st.State == tunnelproto.StateUnconfirmed:
+				v.State = "unconfirmed"
 			}
 		}
 	}

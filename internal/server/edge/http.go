@@ -83,6 +83,8 @@ func newHTTPProxy(e *Edge) *httpProxy {
 				errorPage(w, http.StatusBadGateway, "设备离线", "提供这个地址的设备目前不在线，请稍后再试。")
 			case errors.Is(err, tunnelproto.ReplyDialFailed):
 				errorPage(w, http.StatusBadGateway, "本地服务不可达", "设备在线，但它本地的服务没有响应。")
+			case errors.Is(err, tunnelproto.ReplyUnconfirmed):
+				errorPage(w, http.StatusServiceUnavailable, "等待设备确认", "这个隧道还没有在提供它的设备上确认，确认后即可访问。")
 			case errors.Is(err, tunnelproto.ReplyInactive), errors.Is(err, tunnelproto.ReplyUnknownTunnel):
 				errorPage(w, http.StatusServiceUnavailable, "隧道已暂停", "这个隧道目前没有启用。")
 			case errors.Is(err, context.Canceled):

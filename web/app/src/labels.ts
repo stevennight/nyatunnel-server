@@ -10,6 +10,7 @@ export const tunnelStates: Record<TunnelState, { label: string; tone: Tone }> = 
   expired: { label: '已到期', tone: 'bad' },
   over_quota: { label: '流量已用完', tone: 'bad' },
   unassigned: { label: '未绑定设备', tone: 'b' },
+  unconfirmed: { label: '等待设备确认', tone: 'warn' },
   error: { label: '出错', tone: 'bad' },
 }
 
