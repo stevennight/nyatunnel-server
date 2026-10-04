@@ -112,3 +112,19 @@ export const mbpsToKbps = (mbps: number) => Math.round(mbps * 1000)
 /** MB ↔ GB for quota inputs (1 GB = 1024 MB). */
 export const mbToGb = (mb: number) => (mb > 0 ? String(Math.round((mb / 1024) * 100) / 100) : '')
 export const gbToMb = (gb: number) => Math.round(gb * 1024)
+
+/**
+ * Checks the local port of a tunnel (the port of the service on the device). Unlike the public
+ * port it cannot be chosen automatically. Returns the problem, or "" when it is fine.
+ */
+export function localPortProblem(raw: string): string {
+  if (!raw.trim()) return '请填写本地端口：设备上被转发的服务监听的端口（公网端口才可以留空自动分配）'
+  const n = Number(raw)
+  if (!Number.isInteger(n) || n < 1 || n > 65535) return '本地端口必须在 1–65535 之间'
+  return ''
+}
+
+/** "TCP", "UDP" or "TCP 与 UDP": the port pool(s) a tunnel type takes its public port from. */
+export function poolLabel(type: string): string {
+  return type === 'tcpudp' ? 'TCP 与 UDP' : type.toUpperCase()
+}

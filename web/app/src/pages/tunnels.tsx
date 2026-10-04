@@ -12,9 +12,11 @@ import {
   fromLocalInput,
   gbToMb,
   kbpsToMbps,
+  localPortProblem,
   mbToGb,
   mbpsToKbps,
   parseAmount,
+  poolLabel,
   quotaMb,
   toLocalInput,
   until,
@@ -538,8 +540,9 @@ export function TunnelForm({
     setRefused(null)
     const name = f.name.trim()
     if (!NAME_RE.test(name)) return setProblem('名称只能包含小写字母、数字和连字符，最长 40 个字符')
+    const portProblem = localPortProblem(f.localPort)
+    if (portProblem) return setProblem(portProblem)
     const localPort = Number(f.localPort)
-    if (!Number.isInteger(localPort) || localPort < 1 || localPort > 65535) return setProblem('本地端口必须在 1–65535 之间')
     if (!f.localIp.trim()) return setProblem('请填写本地地址')
     let remotePort: number | null = null
     if (https) {
@@ -752,7 +755,7 @@ export function TunnelForm({
                   onChange={(e) => set('remotePort', e.target.value)}
                   placeholder="自动"
                 />
-                <div className="hint">留空则从 {f.type.toUpperCase()} 端口池自动分配；指定时必须在端口池范围内。</div>
+                <div className="hint">留空则从 {poolLabel(f.type)} 端口池自动分配；指定时必须在端口池范围内。</div>
               </div>
             </div>
           )}
@@ -771,10 +774,11 @@ export function TunnelForm({
                 inputMode="numeric"
                 value={f.localPort}
                 onChange={(e) => set('localPort', e.target.value)}
-                placeholder="8080"
+                placeholder="端口"
               />
             </div>
           </div>
+          <div className="hint" style={{ marginBottom: 8 }}>设备上要转发的服务，例如 127.0.0.1:25565。本地端口必填，不会自动分配。</div>
           <label className="chk">
             <input type="checkbox" checked={f.clientCanEditLocal} onChange={(e) => set('clientCanEditLocal', e.target.checked)} />
             允许客户端修改本地目标地址

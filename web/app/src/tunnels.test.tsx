@@ -124,4 +124,18 @@ describe('tunnel form', () => {
     await waitFor(() => expect(calls.some((c) => c.method === 'POST')).toBe(true))
     expect(calls.find((c) => c.method === 'POST')!.body).toMatchObject({ type: 'tcp', remotePort: null, domainId: null, subdomain: null, localPort: 22 })
   })
+
+  it('explains that only the public port is automatic', async () => {
+    const calls = mockApi({ ...adminRoutes(), 'POST /tunnels': { status: 201, body: { tunnel: tunnel() } } })
+    renderAt('/tunnels')
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: /新建隧道/ }))
+    const form = await screen.findByRole('form', { name: '隧道表单' })
+    await user.selectOptions(within(form).getByLabelText('类型'), 'tcpudp')
+    expect(within(form).getByText(/留空则从 TCP 与 UDP 端口池自动分配/)).toBeInTheDocument()
+    await user.type(within(form).getByLabelText('名称'), 'game')
+    await user.click(within(form).getByRole('button', { name: '创建' }))
+    expect(await within(form).findByText(/请填写本地端口/)).toBeInTheDocument()
+    expect(calls.some((c) => c.method === 'POST')).toBe(false)
+  })
 })

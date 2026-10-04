@@ -5,7 +5,7 @@ import type { FormEvent } from 'react'
 import { FilePlus2 } from 'lucide-react'
 import { cancelRequest, createRequest, describeError, listDevices, listDomains, listRequests, listUsers, rejectRequest } from '../api'
 import { ConfirmDialog, Empty, Loading, Modal, Notice, PageHead, Tag } from '../components/ui'
-import { ago, dateTime } from '../format'
+import { ago, dateTime, localPortProblem } from '../format'
 import { durationLabel, durations, requestStatuses, tunnelTypes } from '../labels'
 import { POLL_MS } from '../query'
 import { useSession } from '../session'
@@ -326,8 +326,9 @@ export function RequestForm({ initial = {}, onClose }: { initial?: Partial<Reque
 
   const submit = (e: FormEvent) => {
     e.preventDefault()
+    const portProblem = localPortProblem(f.localPort)
+    if (portProblem) return setProblem(portProblem)
     const localPort = Number(f.localPort)
-    if (!Number.isInteger(localPort) || localPort < 1 || localPort > 65535) return setProblem('本地端口必须在 1–65535 之间')
     if (!f.localIp.trim()) return setProblem('请填写本地地址')
     if (!f.reason.trim()) return setProblem('请填写申请理由，方便管理员判断')
     const body: RequestInput = {
@@ -443,7 +444,7 @@ export function RequestForm({ initial = {}, onClose }: { initial?: Partial<Reque
             <div className="inline">
               <input id="rq-ip" className="inp mono" value={f.localIp} onChange={(e) => set('localIp', e.target.value)} />
               <span>:</span>
-              <input className="inp mono narrow" aria-label="本地端口" inputMode="numeric" value={f.localPort} onChange={(e) => set('localPort', e.target.value)} placeholder="8080" />
+              <input className="inp mono narrow" aria-label="本地端口" inputMode="numeric" value={f.localPort} onChange={(e) => set('localPort', e.target.value)} placeholder="端口" />
             </div>
           </div>
           <div className="row">
