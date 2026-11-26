@@ -118,6 +118,9 @@ type TunnelPolicy = {
   loginUsers: string[]
   /** Comma separated IP / CIDR; empty = everyone. */
   ipAllowlist: string
+  /** Web (type = "https") protocol options. */
+  enableHttps: boolean
+  forceHttps: boolean
   /** First-visit warning page (HTTPS only). */
   interstitial: boolean
   /** Host header sent to the local service (HTTPS only); empty = unchanged. */

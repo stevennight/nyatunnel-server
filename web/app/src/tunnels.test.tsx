@@ -138,4 +138,37 @@ describe('tunnel form', () => {
     expect(await within(form).findByText(/请填写本地端口/)).toBeInTheDocument()
     expect(calls.some((c) => c.method === 'POST')).toBe(false)
   })
+
+  it('toggles enableHttps and forceHttps and updates the preview URL', async () => {
+    const calls = mockApi({ ...adminRoutes(), 'POST /tunnels': { status: 201, body: { tunnel: tunnel({ enableHttps: false, forceHttps: false }) } } })
+    renderAt('/tunnels')
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: /新建隧道/ }))
+    const form = await screen.findByRole('form', { name: '隧道表单' })
+    await waitFor(() => expect(within(form).getByLabelText('所属用户')).toHaveValue('usr_admin'))
+
+    await user.type(within(form).getByLabelText('名称'), 'plain-http')
+    await user.type(within(form).getByLabelText('子域名'), 'plain')
+    await user.type(within(form).getByLabelText('本地端口'), '8080')
+
+    const enableBox = within(form).getByLabelText('开启 HTTPS')
+    const forceBox = within(form).getByLabelText(/强制跳转 HTTPS/)
+    expect(enableBox).toBeChecked()
+    expect(forceBox).toBeChecked()
+    expect(within(form).getByText('https://plain.dev.example.com')).toBeInTheDocument()
+
+    await user.click(enableBox)
+    expect(enableBox).not.toBeChecked()
+    expect(forceBox).not.toBeChecked()
+    expect(forceBox).toBeDisabled()
+    expect(within(form).getByText('http://plain.dev.example.com')).toBeInTheDocument()
+
+    await user.click(within(form).getByRole('button', { name: '创建' }))
+    await waitFor(() => expect(calls.some((c) => c.method === 'POST')).toBe(true))
+    expect(calls.find((c) => c.method === 'POST')!.body).toMatchObject({
+      type: 'https',
+      enableHttps: false,
+      forceHttps: false,
+    })
+  })
 })

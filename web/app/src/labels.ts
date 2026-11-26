@@ -15,7 +15,7 @@ export const tunnelStates: Record<TunnelState, { label: string; tone: Tone }> = 
 }
 
 export const tunnelTypes: Record<TunnelType, { label: string; tone: Tone }> = {
-  https: { label: 'HTTPS', tone: 'b' },
+  https: { label: 'Web', tone: 'b' },
   tcp: { label: 'TCP', tone: 'warn' },
   udp: { label: 'UDP', tone: 'warn' },
   tcpudp: { label: 'TCP+UDP', tone: 'warn' },

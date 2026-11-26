@@ -120,6 +120,18 @@ func (e *Edge) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		}
 		return
 	}
+	// Enforce per-tunnel HTTP/HTTPS policy when the visitor protocol is known (TLS or trusted proxy header).
+	if req.TLS != nil || (e.opt.RealIP.FromPeer(req) && req.Header.Get("X-Forwarded-Proto") != "") {
+		proto := e.opt.RealIP.Proto(req)
+		if r.EnableHTTPS && r.ForceHTTPS && proto == "http" {
+			http.Redirect(w, req, "https://"+req.Host+req.URL.RequestURI(), http.StatusPermanentRedirect)
+			return
+		}
+		if !r.EnableHTTPS && proto == "https" {
+			http.Redirect(w, req, "http://"+req.Host+req.URL.RequestURI(), http.StatusPermanentRedirect)
+			return
+		}
+	}
 	client := e.opt.RealIP.ClientIP(req)
 	if !r.allowed(client) {
 		errorPage(w, http.StatusForbidden, "禁止访问", "你的网络地址不在这个隧道的访问白名单内。")

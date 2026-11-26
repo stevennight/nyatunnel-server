@@ -61,6 +61,10 @@ type Tunnel struct {
 	// Login gate scope (AccessPolicy "login"): owner, users (owner + LoginUsers) or all accounts.
 	LoginAccess string
 	LoginUsers  []string // user ids
+
+	// Web (type = "https") protocol options.
+	EnableHTTPS bool
+	ForceHTTPS  bool
 }
 
 // Login gate scopes.
@@ -101,7 +105,7 @@ func (t *Tunnel) Live(now int64) bool {
 const tunnelCols = `id, user_id, device_id, name, type, domain_id, subdomain, host, remote_port, local_ip, local_port,
 	client_can_edit_local, local_loopback_only, client_can_toggle, enabled, paused_by_client, note, expires_at, created_at, updated_at,
 	access_policy, access_password_hash, basic_username, policy_rev, ip_allowlist, interstitial, host_rewrite,
-	bandwidth_kbps, max_conns, monthly_quota_mb, quota_action, login_access, login_users`
+	bandwidth_kbps, max_conns, monthly_quota_mb, quota_action, login_access, login_users, enable_https, force_https`
 
 func scanTunnel(row interface{ Scan(...any) error }) (*Tunnel, error) {
 	var t Tunnel
@@ -110,7 +114,7 @@ func scanTunnel(row interface{ Scan(...any) error }) (*Tunnel, error) {
 		&t.LocalIP, &t.LocalPort, &t.ClientCanEditLocal, &t.LocalLoopbackOnly, &t.ClientCanToggle, &t.Enabled, &t.PausedByClient,
 		&t.Note, &t.ExpiresAt, &t.CreatedAt, &t.UpdatedAt,
 		&t.AccessPolicy, &t.AccessPasswordHash, &t.BasicUsername, &t.PolicyRev, &t.IPAllowlist, &t.Interstitial, &t.HostRewrite,
-		&t.BandwidthKbps, &t.MaxConns, &t.MonthlyQuotaMB, &t.QuotaAction, &t.LoginAccess, &loginUsers); err != nil {
+		&t.BandwidthKbps, &t.MaxConns, &t.MonthlyQuotaMB, &t.QuotaAction, &t.LoginAccess, &loginUsers, &t.EnableHTTPS, &t.ForceHTTPS); err != nil {
 		return nil, notFoundOr(err)
 	}
 	_ = json.Unmarshal([]byte(loginUsers), &t.LoginUsers)
@@ -172,7 +176,7 @@ func (s *Store) SaveTunnel(ctx context.Context, t *Tunnel) error {
 		t.LoginAccess = LoginOwner
 	}
 	loginUsers, _ := json.Marshal(nonNil(t.LoginUsers))
-	_, err := s.db.ExecContext(ctx, `INSERT INTO tunnels (`+tunnelCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO tunnels (`+tunnelCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET user_id = excluded.user_id, device_id = excluded.device_id, name = excluded.name, type = excluded.type,
 		domain_id = excluded.domain_id, subdomain = excluded.subdomain, host = excluded.host, remote_port = excluded.remote_port,
 		local_ip = excluded.local_ip, local_port = excluded.local_port, client_can_edit_local = excluded.client_can_edit_local,
@@ -181,11 +185,12 @@ func (s *Store) SaveTunnel(ctx context.Context, t *Tunnel) error {
 		access_policy = excluded.access_policy, access_password_hash = excluded.access_password_hash, basic_username = excluded.basic_username,
 		policy_rev = excluded.policy_rev, ip_allowlist = excluded.ip_allowlist, interstitial = excluded.interstitial, host_rewrite = excluded.host_rewrite,
 		bandwidth_kbps = excluded.bandwidth_kbps, max_conns = excluded.max_conns, monthly_quota_mb = excluded.monthly_quota_mb,
-		quota_action = excluded.quota_action, login_access = excluded.login_access, login_users = excluded.login_users`,
+		quota_action = excluded.quota_action, login_access = excluded.login_access, login_users = excluded.login_users,
+		enable_https = excluded.enable_https, force_https = excluded.force_https`,
 		t.ID, t.UserID, t.DeviceID, t.Name, t.Type, t.DomainID, t.Subdomain, t.Host, t.RemotePort, t.LocalIP, t.LocalPort,
 		t.ClientCanEditLocal, t.LocalLoopbackOnly, t.ClientCanToggle, t.Enabled, t.PausedByClient, t.Note, t.ExpiresAt, t.CreatedAt, t.UpdatedAt,
 		t.AccessPolicy, t.AccessPasswordHash, t.BasicUsername, t.PolicyRev, t.IPAllowlist, t.Interstitial, t.HostRewrite,
-		t.BandwidthKbps, t.MaxConns, t.MonthlyQuotaMB, t.QuotaAction, t.LoginAccess, string(loginUsers))
+		t.BandwidthKbps, t.MaxConns, t.MonthlyQuotaMB, t.QuotaAction, t.LoginAccess, string(loginUsers), t.EnableHTTPS, t.ForceHTTPS)
 	return conflictOr(err)
 }
 

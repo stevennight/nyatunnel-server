@@ -127,6 +127,8 @@ export const tunnel = (t: Partial<Tunnel> = {}): Tunnel => ({
   basicUsername: '',
   loginAccess: 'owner',
   loginUsers: [],
+  enableHttps: true,
+  forceHttps: true,
   ipAllowlist: '',
   interstitial: false,
   hostRewrite: '',

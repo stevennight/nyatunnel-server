@@ -135,9 +135,14 @@ export function TunnelsPage() {
                   </td>
                   <td className="mono">
                     {t.type === 'https' ? (
-                      <a href={t.publicUrl} target="_blank" rel="noreferrer noopener">
-                        {t.publicUrl.replace(/^https:\/\//, '')}
-                      </a>
+                      <>
+                        <a href={t.publicUrl} target="_blank" rel="noreferrer noopener">
+                          {t.enableHttps ? t.publicUrl.replace(/^https:\/\//, '') : t.publicUrl}
+                        </a>
+                        {t.enableHttps && !t.forceHttps && (
+                          <div className="hint">同时支持 HTTP</div>
+                        )}
+                      </>
                     ) : (
                       t.publicUrl
                     )}
@@ -282,6 +287,8 @@ export type FormState = {
   /** Comma separated usernames. */
   loginUsers: string
   ipAllowlist: string
+  enableHttps: boolean
+  forceHttps: boolean
   interstitial: boolean
   hostRewrite: string
   bandwidthMbps: string
@@ -313,6 +320,8 @@ export function emptyForm(selfId: string): FormState {
     loginAccess: 'owner',
     loginUsers: '',
     ipAllowlist: '',
+    enableHttps: true,
+    forceHttps: true,
     interstitial: false,
     hostRewrite: '',
     bandwidthMbps: '',
@@ -345,6 +354,8 @@ function formFromTunnel(t: Tunnel): FormState {
     loginAccess: t.loginAccess || 'owner',
     loginUsers: (t.loginUsers ?? []).join(', '),
     ipAllowlist: t.ipAllowlist ?? '',
+    enableHttps: t.enableHttps ?? true,
+    forceHttps: t.forceHttps ?? true,
     interstitial: t.interstitial,
     hostRewrite: t.hostRewrite ?? '',
     bandwidthMbps: kbpsToMbps(t.bandwidthKbps),
@@ -597,6 +608,8 @@ export function TunnelForm({
         .split(/[\s,，]+/)
         .filter(Boolean)
         .join(', '),
+      enableHttps: https && f.enableHttps,
+      forceHttps: https && f.enableHttps && f.forceHttps,
       interstitial: https && f.interstitial,
       hostRewrite: https ? f.hostRewrite.trim() : '',
       bandwidthKbps: mbpsToKbps(bw),
@@ -659,7 +672,7 @@ export function TunnelForm({
             <label htmlFor="tf-type">类型</label>
             <div>
               <select id="tf-type" className="inp" value={f.type} disabled={tunnel !== null} onChange={(e) => changeType(e.target.value as TunnelType)}>
-                <option value="https">HTTPS（Caddy 终止 TLS）</option>
+                <option value="https">Web（HTTP / HTTPS）</option>
                 <option value="tcp">TCP</option>
                 <option value="udp">UDP</option>
                 <option value="tcpudp">TCP+UDP（同一端口）</option>
@@ -729,19 +742,46 @@ export function TunnelForm({
                   )}
                   {domain && (isCustom || subInput) && (
                     <div className="hint">
-                      访问地址：<span className="mono">https://{isCustom ? domain.name : `${f.subdomain}.${domain.name}`}</span>
+                      访问地址：<span className="mono">{f.enableHttps ? 'https' : 'http'}://{isCustom ? domain.name : `${f.subdomain}.${domain.name}`}</span>
+                      {f.enableHttps && !f.forceHttps && '（同时支持 http://）'}
                     </div>
                   )}
                   {isCustom && domain?.status === 'dns' && <div className="hint warn-text">该域名还没有解析到本服务器，DNS 生效后才能访问。</div>}
                 </div>
               </div>
               <div className="row">
-                <span className="label">证书</span>
-                <span className="hint">
-                  {isCustom
-                    ? '由前置的 Caddy 在访客首次访问时自动签发（仅对已生效的自定义域名）。'
-                    : `由前置的 Caddy 负责（${domain ? `*.${domain.name}` : '通配证书'}，DNS-01 自动续期）。`}
-                </span>
+                <span className="label">协议</span>
+                <div>
+                  <label className="chk">
+                    <input
+                      type="checkbox"
+                      checked={f.enableHttps}
+                      onChange={(e) => {
+                        const on = e.target.checked
+                        setF((s) => ({ ...s, enableHttps: on, forceHttps: on ? s.forceHttps : false }))
+                      }}
+                    />
+                    开启 HTTPS
+                  </label>
+                  <label className="chk">
+                    <input
+                      type="checkbox"
+                      checked={f.enableHttps && f.forceHttps}
+                      disabled={!f.enableHttps}
+                      onChange={(e) => set('forceHttps', e.target.checked)}
+                    />
+                    强制跳转 HTTPS（将 HTTP 访问重定向到 HTTPS）
+                  </label>
+                  <div className="hint">
+                    {!f.enableHttps
+                      ? '仅提供明文 HTTP 访问（端口 80），不申请 TLS 证书；适用于需避免浏览器混合内容拦截的测试场景。'
+                      : f.forceHttps
+                        ? isCustom
+                          ? '由前置的 Caddy 在访客首次访问时自动签发证书（仅对已生效的自定义域名）。'
+                          : `由前置的 Caddy 负责证书（${domain ? `*.${domain.name}` : '通配证书'}，DNS-01 自动续期）。`
+                        : '同时允许 HTTP 与 HTTPS 直接访问，不自动跳转。'}
+                  </div>
+                </div>
               </div>
             </>
           ) : (

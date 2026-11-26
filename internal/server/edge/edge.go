@@ -73,6 +73,9 @@ type route struct {
 	MaxConns      int
 	QuotaMB       int
 	QuotaAction   string
+
+	EnableHTTPS bool
+	ForceHTTPS  bool
 }
 
 func (r *route) live(now time.Time) bool {
@@ -173,6 +176,7 @@ func (e *Edge) routeFor(t *store.Tunnel) *route {
 		Policy: t.AccessPolicy, PasswordHash: t.AccessPasswordHash, BasicUser: t.BasicUsername, PolicyRev: t.PolicyRev,
 		Interstitial: t.Interstitial, HostRewrite: t.HostRewrite,
 		BandwidthKbps: t.BandwidthKbps, MaxConns: t.MaxConns, QuotaMB: t.MonthlyQuotaMB, QuotaAction: t.QuotaAction,
+		EnableHTTPS: t.EnableHTTPS, ForceHTTPS: t.ForceHTTPS,
 	}
 	if t.DeviceID != nil {
 		r.DeviceID = *t.DeviceID
@@ -332,10 +336,10 @@ func (e *Edge) routeByID(id string) *route {
 	return e.all[id]
 }
 
-// AllowCertificate answers the reverse proxy's on-demand TLS question: is this a tunnel host?
+// AllowCertificate answers the reverse proxy's on-demand TLS question: is this a tunnel host with HTTPS enabled?
 func (e *Edge) AllowCertificate(host string) bool {
 	r := e.routeByHost(strings.TrimSuffix(host, "."))
-	return r != nil && r.Enabled
+	return r != nil && r.Enabled && r.EnableHTTPS
 }
 
 // ListenerPorts returns the ports currently open, for the dashboard.

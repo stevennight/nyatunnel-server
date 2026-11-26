@@ -54,6 +54,8 @@ type tunnelView struct {
 	// LoginAccess is owner, users or all; LoginUsers are the extra usernames for "users".
 	LoginAccess string   `json:"loginAccess"`
 	LoginUsers  []string `json:"loginUsers"`
+	EnableHTTPS bool     `json:"enableHttps"`
+	ForceHTTPS  bool     `json:"forceHttps"`
 	ActiveConns int64    `json:"activeConns"`
 	// State is running, offline, paused, disabled, expired, over_quota, unassigned, unconfirmed
 	// (waiting for the device owner to confirm it on the device) or error.
@@ -72,6 +74,7 @@ func (s *server) viewTunnel(t *store.Tunnel, users, devices map[string]string, m
 		MonthlyQuotaMB: t.MonthlyQuotaMB, QuotaAction: t.QuotaAction,
 		MonthBytes: month[t.ID].Bytes() + s.Edge.PendingTraffic(t.ID), ActiveConns: s.Edge.Active(t.ID),
 		LoginAccess: t.LoginAccess, LoginUsers: []string{},
+		EnableHTTPS: t.EnableHTTPS, ForceHTTPS: t.ForceHTTPS,
 	}
 	for _, id := range t.LoginUsers {
 		if name := users[id]; name != "" {
@@ -176,6 +179,9 @@ type tunnelInput struct {
 	// Login gate scope: owner (default), users (owner + LoginUsers) or all.
 	LoginAccess string   `json:"loginAccess"`
 	LoginUsers  []string `json:"loginUsers"` // usernames
+	// Web (type = "https") protocol flags; nil defaults to true on create or keeps the current value on update.
+	EnableHTTPS *bool `json:"enableHttps"`
+	ForceHTTPS  *bool `json:"forceHttps"`
 }
 
 func (s *server) handleCreateTunnel(w http.ResponseWriter, r *http.Request, p *principal) {
@@ -339,6 +345,22 @@ func (s *server) applyTunnelInput(w http.ResponseWriter, r *http.Request, t *sto
 
 	switch in.Type {
 	case store.TypeHTTPS:
+		enableHTTPS := true
+		forceHTTPS := true
+		if old != nil {
+			enableHTTPS = old.EnableHTTPS
+			forceHTTPS = old.ForceHTTPS
+		}
+		if in.EnableHTTPS != nil {
+			enableHTTPS = *in.EnableHTTPS
+		}
+		if in.ForceHTTPS != nil {
+			forceHTTPS = *in.ForceHTTPS
+		}
+		if !enableHTTPS {
+			forceHTTPS = false
+		}
+		t.EnableHTTPS, t.ForceHTTPS = enableHTTPS, forceHTTPS
 		if in.DomainID == nil {
 			return bad("domain_required", "请选择域名")
 		}
@@ -384,6 +406,7 @@ func (s *server) applyTunnelInput(w http.ResponseWriter, r *http.Request, t *sto
 			return false
 		}
 		t.DomainID, t.Subdomain, t.Host, t.RemotePort = nil, nil, nil, &port
+		t.EnableHTTPS, t.ForceHTTPS = false, false
 	default:
 		return bad("invalid_type", "类型必须是 https、tcp、udp 或 tcpudp")
 	}

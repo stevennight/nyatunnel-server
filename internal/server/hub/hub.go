@@ -203,6 +203,9 @@ func (h *Hub) BuildConfig(ctx context.Context, deviceID string) (*tunnelproto.Co
 func (h *Hub) PublicURL(t *store.Tunnel) string {
 	switch {
 	case t.Host != nil:
+		if !t.EnableHTTPS {
+			return "http://" + *t.Host
+		}
 		return "https://" + *t.Host
 	case t.RemotePort != nil:
 		scheme := t.Type

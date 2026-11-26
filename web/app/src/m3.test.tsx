@@ -483,7 +483,7 @@ describe('user quota', () => {
     expect(await within(form).findByRole('alert')).toHaveTextContent('至少允许一种类型')
 
     await user.type(within(form).getByLabelText('最多隧道数'), '3')
-    await user.click(within(form).getByLabelText('HTTPS'))
+    await user.click(within(form).getByLabelText('Web'))
     await user.type(within(form).getByLabelText('单隧道带宽'), '10')
     await user.type(within(form).getByLabelText('最长有效期'), '7')
     await user.click(within(form).getByLabelText(/强制显示首次访问提示页/))

@@ -37,12 +37,27 @@ tunnel.example.com {
 	}
 }
 
+# Plain HTTP ingress for Web tunnels (port 80). NyaTunnel itself decides per tunnel whether to
+# redirect HTTP -> HTTPS (308) or serve plain HTTP directly.
+http://*.dev.example.com {
+	reverse_proxy 127.0.0.1:8081 {
+		flush_interval -1
+	}
+}
+
 # Custom domains: catches every host not matched by a more specific site above (your other
 # sites keep working). Certificates are issued on first visit, only for domains NyaTunnel approves.
 https:// {
 	tls {
 		on_demand
 	}
+	reverse_proxy 127.0.0.1:8081 {
+		flush_interval -1
+	}
+}
+
+# Plain HTTP ingress for custom domains (port 80).
+http:// {
 	reverse_proxy 127.0.0.1:8081 {
 		flush_interval -1
 	}
