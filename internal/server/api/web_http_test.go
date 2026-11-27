@@ -105,4 +105,43 @@ func TestWebTunnelHTTPSOptions(t *testing.T) {
 	if resp.StatusCode != http.StatusPermanentRedirect || resp.Header.Get("Location") != "http://plain.t.example.com/ping?a=1" {
 		t.Fatalf("expected 308 redirect to http, got %d %q", resp.StatusCode, resp.Header.Get("Location"))
 	}
+
+	// 4. Interstitial over HTTP uses a distinct non-Secure cookie name so a prior HTTPS Secure cookie cannot block it.
+	p.admin.must("PUT", "/api/v1/tunnels/"+t3.Tunnel.ID, map[string]any{
+		"userId": p.adminID, "deviceId": p.deviceID, "name": "plain", "type": "https",
+		"domainId": p.domainID, "subdomain": "plain",
+		"localIp": "127.0.0.1", "localPort": localPort(t, backend.URL), "enabled": true,
+		"enableHttps": false, "forceHttps": false, "interstitial": true,
+	}, nil)
+	ackReq, _ := http.NewRequest("POST", p.ingress.URL+"/__nyatunnel/continue", nil)
+	ackReq.Host = "plain.t.example.com"
+	ackReq.Header.Set("X-Forwarded-Proto", "http")
+	ackResp, err := noRedirect.Do(ackReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ackResp.Body.Close()
+	var ackCookie *http.Cookie
+	for _, c := range ackResp.Cookies() {
+		if c.Name == "__nyatunnel_ack_http" {
+			ackCookie = c
+		}
+	}
+	if ackCookie == nil || ackCookie.Secure {
+		t.Fatalf("expected non-Secure __nyatunnel_ack_http cookie, got %+v", ackResp.Cookies())
+	}
+	getReq, _ := http.NewRequest("GET", p.ingress.URL+"/ping", nil)
+	getReq.Host = "plain.t.example.com"
+	getReq.Header.Set("X-Forwarded-Proto", "http")
+	getReq.Header.Set("Accept", "text/html")
+	getReq.AddCookie(ackCookie)
+	getResp, err := noRedirect.Do(getReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ = io.ReadAll(getResp.Body)
+	getResp.Body.Close()
+	if getResp.StatusCode != http.StatusOK || string(b) != "proto=http" {
+		t.Fatalf("expected 200 proto=http after HTTP interstitial ack, got %d %q", getResp.StatusCode, string(b))
+	}
 }

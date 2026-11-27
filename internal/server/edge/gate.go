@@ -76,8 +76,18 @@ func (g *gate) cookieValue(kind string, r *route, ttl time.Duration) string {
 	return g.sign(fmt.Sprintf("%s|%s|%d|%d", kind, r.TunnelID, r.PolicyRev, exp))
 }
 
+// cookieName separates plain-HTTP cookies from HTTPS Secure cookies: modern browsers refuse to
+// let an HTTP response overwrite an existing Secure cookie of the same name (RFC 6265bis), which
+// would trap visitors in an interstitial / password / login loop after a tunnel switches to HTTP.
+func (g *gate) cookieName(req *http.Request, base string) string {
+	if g.e.opt.RealIP.Proto(req) == "https" {
+		return base
+	}
+	return base + "_http"
+}
+
 func (g *gate) hasCookie(req *http.Request, name, kind string, r *route) bool {
-	c, err := req.Cookie(name)
+	c, err := req.Cookie(g.cookieName(req, name))
 	if err != nil {
 		return false
 	}
@@ -95,7 +105,7 @@ func (g *gate) hasCookie(req *http.Request, name, kind string, r *route) bool {
 
 func (g *gate) setCookie(w http.ResponseWriter, req *http.Request, name, value string, ttl time.Duration) {
 	http.SetCookie(w, &http.Cookie{
-		Name: name, Value: value, Path: "/", MaxAge: int(ttl.Seconds()), HttpOnly: true,
+		Name: g.cookieName(req, name), Value: value, Path: "/", MaxAge: int(ttl.Seconds()), HttpOnly: true,
 		Secure: g.e.opt.RealIP.Proto(req) == "https", SameSite: http.SameSiteLaxMode, // host-only: no Domain attribute
 	})
 }
